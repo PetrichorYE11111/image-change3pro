@@ -113,7 +113,7 @@ const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 
-const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
+const GEMINI_SUPPORTED_RATIOS = ["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"];
 const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
 
 function normalizeQuality(quality: string) {
@@ -200,8 +200,8 @@ function resolveGeminiImageConfig(config: AiConfig) {
     const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
     const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
     const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions) : undefined;
-    const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
-    return Object.keys(image).length ? { responseFormat: { image } } : {};
+    const image = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) };
+    return Object.keys(image).length ? { imageConfig: image } : {};
 }
 
 function closestGeminiAspectRatio(value: string) {
@@ -219,7 +219,6 @@ function resolveGeminiImageSize(quality: string, dimensions: { width: number; he
     if (normalizedQuality) return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
     if (!dimensions) return undefined;
     const edge = Math.max(dimensions.width, dimensions.height);
-    if (edge <= 768) return "512";
     if (edge <= 1536) return "1K";
     if (edge <= 3072) return "2K";
     return "4K";
@@ -632,10 +631,11 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
     for (const image of references) {
         parts.push(toGeminiImagePart(await imageToDataUrl(image)));
     }
+    const imageConfig = resolveGeminiImageConfig(config);
     const response = await axios.post<GeminiPayload>(
         geminiApiUrl(config, "generateContent"),
         {
-            ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
+            ...toGeminiBody(config, [{ role: "user", content: prompt }], Object.keys(imageConfig).length ? { generationConfig: imageConfig } : {}),
             contents: [{ role: "user", parts }],
         },
         { headers: geminiHeaders(config), signal: options?.signal },

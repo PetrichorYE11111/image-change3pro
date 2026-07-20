@@ -222,24 +222,106 @@ return (edited.data || []).map((item) => item.b64_json ? \`data:image/png;base64
         },
         {
             label: "Gemini 规范",
-            script: `// Gemini 文生图 / 图生图：都走 generateContent，参考图放进 parts 的 inline_data。
-// 可用：prompt、images(dataURL[])、model、baseUrl、apiKey
+            script: `// Gemini 文生图 / 图生图：都走 generateContent，参考图放进 parts 的 inlineData。
+// 可用：prompt、images(dataURL[])、params{size,quality}、model、baseUrl、apiKey
 const parts = [{ text: prompt }];
 for (const dataUrl of images) {
   const match = dataUrl.match(/^data:([^;]+);base64,(.*)$/);
-  if (match) parts.push({ inline_data: { mime_type: match[1], data: match[2] } });
+  if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
 }
+// params.size（如 "1824x1024"）就近匹配宽高比；params.quality 映射 imageSize（high=4K / medium=2K / low=1K）
+const RATIOS = ["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"];
+const dim = (params.size || "").match(/^(\\d+)x(\\d+)$/);
+const aspectRatio = dim
+  ? RATIOS.reduce((best, r) => {
+      const [rw, rh] = r.split(":").map(Number);
+      const [bw, bh] = best.split(":").map(Number);
+      const target = Number(dim[1]) / Number(dim[2]);
+      return Math.abs(rw / rh - target) < Math.abs(bw / bh - target) ? r : best;
+    })
+  : undefined;
+const imageSize = { high: "4K", hd: "4K", medium: "2K", low: "1K" }[params.quality];
+const imageConfig = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) };
 const data = await request({
   method: "post",
   url: \`\${baseUrl}/v1beta/models/\${model}:generateContent\`,
   headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-  data: { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"] } },
+  data: {
+    contents: [{ role: "user", parts }],
+    ...(Object.keys(imageConfig).length ? { generationConfig: { imageConfig } } : {}),
+  },
 });
 return (data.candidates || [])
   .flatMap((c) => c.content?.parts || [])
   .map((p) => p.inlineData || p.inline_data)
   .filter(Boolean)
   .map((img) => \`data:\${img.mimeType || img.mime_type || "image/png"};base64,\${img.data}\`);`,
+        },
+        {
+            label: "Gemini 流式",
+            script: `// Gemini 流式生图：streamGenerateContent?alt=sse，逐块解析 SSE 提取图片。
+// 可用：prompt、images(dataURL[])、params{size,quality}、model、baseUrl、apiKey、signal
+const parts = [{ text: prompt }];
+for (const dataUrl of images) {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.*)$/);
+  if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+}
+const RATIOS = ["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"];
+const dim = (params.size || "").match(/^(\\d+)x(\\d+)$/);
+const aspectRatio = dim
+  ? RATIOS.reduce((best, r) => {
+      const [rw, rh] = r.split(":").map(Number);
+      const [bw, bh] = best.split(":").map(Number);
+      const target = Number(dim[1]) / Number(dim[2]);
+      return Math.abs(rw / rh - target) < Math.abs(bw / bh - target) ? r : best;
+    })
+  : undefined;
+const imageSize = { high: "4K", hd: "4K", medium: "2K", low: "1K" }[params.quality];
+const imageConfig = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) };
+const response = await fetch(\`\${baseUrl}/v1beta/models/\${model}:streamGenerateContent?alt=sse\`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+  body: JSON.stringify({
+    contents: [{ role: "user", parts }],
+    ...(Object.keys(imageConfig).length ? { generationConfig: { imageConfig } } : {}),
+  }),
+  signal,
+});
+if (!response.ok) throw new Error(\`请求失败：\${response.status}\`);
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+const results = [];
+const consume = (block) => {
+  const payload = block
+    .split(/\\r?\\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .join("");
+  if (!payload || payload === "[DONE]") return;
+  let chunk;
+  try { chunk = JSON.parse(payload); } catch { return; }
+  for (const c of chunk.candidates || []) {
+    for (const p of c.content?.parts || []) {
+      const img = p.inlineData || p.inline_data;
+      if (img?.data) results.push(\`data:\${img.mimeType || img.mime_type || "image/png"};base64,\${img.data}\`);
+    }
+  }
+};
+for (;;) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+  for (;;) {
+    const idx = buffer.search(/\\r?\\n\\r?\\n/);
+    if (idx < 0) break;
+    consume(buffer.slice(0, idx));
+    buffer = buffer.replace(/^[\\s\\S]*?\\r?\\n\\r?\\n/, "");
+  }
+}
+if (buffer.trim()) consume(buffer);
+if (!results.length) throw new Error("流式响应中没有找到图片");
+return results;`,
         },
     ],
     video: [
