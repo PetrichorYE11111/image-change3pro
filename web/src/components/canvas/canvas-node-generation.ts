@@ -5,6 +5,7 @@ import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
 import { getGenerationResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import type { Asset, ImageAsset, TextAsset, VideoAsset } from "@/stores/use-asset-store";
 
 export type NodeGenerationContext = {
     prompt: string;
@@ -27,8 +28,8 @@ export type NodeGenerationInput = {
     audio?: ReferenceAudio;
 };
 
-export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string): NodeGenerationContext {
-    const inputs = buildNodeGenerationInputs(nodeId, nodes, connections);
+export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string, extraInputs?: NodeGenerationInput[]): NodeGenerationContext {
+    const inputs = [...buildNodeGenerationInputs(nodeId, nodes, connections), ...(extraInputs ?? [])];
     const sourceNode = nodes.find((node) => node.id === nodeId);
     if (sourceNode?.type === CanvasNodeType.Config && Boolean(sourceNode.metadata?.composerContent?.trim())) {
         return buildComposerGenerationContext(inputs, prompt);
@@ -123,6 +124,32 @@ export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[
         if (audio) return [{ nodeId: node.id, type: "audio" as const, title: node.title, audio }];
         const text = readNodeTextInput(node);
         if (text) return [{ nodeId: node.id, type: "text" as const, title: node.title, text }];
+        return [];
+    });
+}
+
+/** 将资产库中的资产转换为生成输入，供 buildNodeGenerationContext 的 extraInputs 使用。 */
+export function buildAssetGenerationInputs(assets: Asset[]): NodeGenerationInput[] {
+    return assets.flatMap((asset): NodeGenerationInput[] => {
+        if (asset.kind === "image") {
+            const a = asset as ImageAsset;
+            const dataUrl = a.data.dataUrl || a.coverUrl;
+            if (!dataUrl) return [];
+            const image: ReferenceImage = { id: a.id, name: a.title || a.id, type: a.data.mimeType || "image/png", dataUrl, storageKey: a.data.storageKey };
+            return [{ nodeId: a.id, type: "image" as const, title: a.title, image }];
+        }
+        if (asset.kind === "video") {
+            const a = asset as VideoAsset;
+            const url = a.data.url;
+            if (!url) return [];
+            const video: ReferenceVideo = { id: a.id, name: a.title || a.id, type: a.data.mimeType || "video/mp4", url, storageKey: a.data.storageKey };
+            return [{ nodeId: a.id, type: "video" as const, title: a.title, video }];
+        }
+        if (asset.kind === "text") {
+            const a = asset as TextAsset;
+            if (!a.data.content) return [];
+            return [{ nodeId: a.id, type: "text" as const, title: a.title, text: a.data.content }];
+        }
         return [];
     });
 }

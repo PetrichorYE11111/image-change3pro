@@ -2,6 +2,7 @@ import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
+import type { Asset, ImageAsset, TextAsset, VideoAsset } from "@/stores/use-asset-store";
 
 export type CanvasResourceKind = "image" | "video" | "audio" | "text";
 
@@ -96,4 +97,39 @@ function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
     if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return "text";
     // 插件节点通过 definition.resource 声明可作为输入
     return getNodeDefinition(node.type)?.resource?.(node)?.kind || null;
+}
+
+/** 统计每种 kind 在给定引用列表中已占用的序号数（用于资产引用标签续号）。 */
+export function countReferencesByKind(refs: CanvasResourceReference[]): Record<CanvasResourceKind, number> {
+    const counts: Record<CanvasResourceKind, number> = { image: 0, video: 0, audio: 0, text: 0 };
+    for (const ref of refs) counts[ref.kind]++;
+    return counts;
+}
+
+/**
+ * 将资产库的资产转换为画布引用列表，标签从 countOffset 指定的序号开始续号，
+ * 避免与同一节点的画布连线引用产生标签冲突（如都叫"图片1"）。
+ */
+export function buildAssetMentionReferences(
+    assets: Asset[],
+    countOffset: Partial<Record<CanvasResourceKind, number>> = {},
+): CanvasResourceReference[] {
+    const counts: Record<CanvasResourceKind, number> = {
+        image: countOffset.image ?? 0,
+        video: countOffset.video ?? 0,
+        audio: countOffset.audio ?? 0,
+        text: countOffset.text ?? 0,
+    };
+    return assets.flatMap((asset): CanvasResourceReference[] => {
+        const kind = asset.kind as CanvasResourceKind;
+        if (!counts[kind] && counts[kind] !== 0) return [];
+        const index = counts[kind]++;
+        const label = labelForKind(kind, index);
+        let previewUrl: string | undefined;
+        let text: string | undefined;
+        if (asset.kind === "image") previewUrl = (asset as ImageAsset).data.dataUrl || asset.coverUrl || undefined;
+        else if (asset.kind === "video") previewUrl = asset.coverUrl || (asset as VideoAsset).data.url || undefined;
+        else if (asset.kind === "text") text = (asset as TextAsset).data.content;
+        return [{ id: asset.id, nodeId: asset.id, kind, label, title: asset.title || label, previewUrl, text, active: true }];
+    });
 }
