@@ -77,10 +77,18 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
         const worldX = (mouseX - viewport.x) / viewport.k;
         const worldY = (mouseY - viewport.y) / viewport.k;
 
-        onViewportChange({
+        const nextViewport = {
             x: mouseX - worldX * newScale,
             y: mouseY - worldY * newScale,
             k: newScale,
+        };
+        // 与平移路径保持一致：用 rAF 节流，避免高频滚轮事件排队大量渲染，
+        // 使 CSS transform 与 visibleNodes 裁剪计算保持同步。
+        nextViewportRef.current = nextViewport;
+        if (frameRef.current) return;
+        frameRef.current = requestAnimationFrame(() => {
+            frameRef.current = null;
+            if (nextViewportRef.current) onViewportChange(nextViewportRef.current);
         });
     };
 
@@ -194,6 +202,7 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
                 className="absolute origin-top-left"
                 style={{
                     transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.k})`,
+                    willChange: "transform",
                 }}
             >
                 {children}

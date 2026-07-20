@@ -566,7 +566,9 @@ function InfiniteCanvasPage() {
     );
 
     const visibleNodes = useMemo(() => {
-        const padding = 280;
+        // padding 以屏幕像素为单位，换算成世界坐标后保证任何缩放比例下都有足够的预载缓冲
+        const screenPadding = 400;
+        const padding = screenPadding / viewport.k;
         const rect = containerRef.current?.getBoundingClientRect();
         const width = rect?.width || size.width;
         const height = rect?.height || size.height;
