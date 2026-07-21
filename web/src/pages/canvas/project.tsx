@@ -642,12 +642,14 @@ function InfiniteCanvasPage() {
 
     const configInputsById = useMemo(() => {
         const map = new Map<string, NodeGenerationInput[]>();
+        // 资产库输入在各 Config 节点间共享，统一计算一次
+        const assetInputs = buildAssetGenerationInputs(assets);
         nodes.forEach((node) => {
             if (node.type !== CanvasNodeType.Config) return;
-            map.set(node.id, buildNodeGenerationInputs(node.id, nodes, connections));
+            map.set(node.id, [...buildNodeGenerationInputs(node.id, nodes, connections), ...assetInputs]);
         });
         return map;
-    }, [connections, nodes]);
+    }, [connections, nodes, assets]);
     const mentionReferencesByNodeId = useMemo(() => {
         const map = new Map<string, ReturnType<typeof buildNodeMentionReferences>>();
         nodes.forEach((node) => {

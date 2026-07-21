@@ -29,11 +29,17 @@ export type NodeGenerationInput = {
 };
 
 export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string, extraInputs?: NodeGenerationInput[]): NodeGenerationContext {
-    const inputs = [...buildNodeGenerationInputs(nodeId, nodes, connections), ...(extraInputs ?? [])];
+    const canvasInputs = buildNodeGenerationInputs(nodeId, nodes, connections);
+    const assetInputs = extraInputs ?? [];
     const sourceNode = nodes.find((node) => node.id === nodeId);
     if (sourceNode?.type === CanvasNodeType.Config && Boolean(sourceNode.metadata?.composerContent?.trim())) {
-        return buildComposerGenerationContext(inputs, prompt);
+        return buildComposerGenerationContext([...canvasInputs, ...assetInputs], prompt);
     }
+
+    // 普通节点：画布连线输入全部保留；资产库输入仅保留提示词中被 @ 引用的，
+    // 避免把未提及的资产也发给 API。
+    const filteredAssetInputs = filterAssetInputsByMentions(canvasInputs, assetInputs, prompt);
+    const inputs = [...canvasInputs, ...filteredAssetInputs];
 
     const upstreamText = inputs
         .map((input) => input.text)
@@ -53,6 +59,29 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         videoCount: referenceVideos.length,
         audioCount: referenceAudios.length,
     };
+}
+
+/**
+ * 根据提示词中出现的引用标签（如"图片1"、"视频2"）过滤资产输入。
+ * 画布连线输入始终保留；资产库输入仅保留在提示词中被 @ 提及的。
+ * 若提示词中不含任何引用标签，回退为保留全部资产（兼容旧行为）。
+ */
+function filterAssetInputsByMentions(canvasInputs: NodeGenerationInput[], assetInputs: NodeGenerationInput[], prompt: string): NodeGenerationInput[] {
+    if (!assetInputs.length) return assetInputs;
+    // 按合并顺序（画布输入在前，资产输入在后）为每条输入分配标签，编号与 UI 侧一致
+    const counts: Record<NodeGenerationInput["type"], number> = { image: 0, video: 0, audio: 0, text: 0 };
+    const labeled = [...canvasInputs, ...assetInputs].map((input) => ({
+        input,
+        label: generationLabel(input.type, counts[input.type]++),
+    }));
+    // 取出所有可能的引用标签，检查哪些出现在提示词里
+    const mentionedLabels = new Set(labeled.map(({ label }) => label).filter((label) => prompt.includes(label)));
+    if (!mentionedLabels.size) return assetInputs; // 无标签时保持原有全量行为
+    // 只保留被提及的资产输入（画布连线输入由调用方始终保留，此处不重复过滤）
+    const canvasNodeIds = new Set(canvasInputs.map((i) => i.nodeId));
+    return labeled
+        .filter(({ input, label }) => !canvasNodeIds.has(input.nodeId) && mentionedLabels.has(label))
+        .map(({ input }) => input);
 }
 
 function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: string): NodeGenerationContext {

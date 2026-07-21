@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Button, Image } from "antd";
 import { FileText, Image as ImageIcon, Music2, Video, X } from "lucide-react";
@@ -20,6 +21,7 @@ type Token =
 
 type MentionState = {
     query: string;
+    rect: DOMRect | null;
 };
 
 export const CONFIG_REFERENCE_PATTERN = /@\[node:([^\]]+)\]/g;
@@ -70,7 +72,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
             closeMention();
             return;
         }
-        setMention({ query: match[1] || "" });
+        setMention({ query: match[1] || "", rect: caretRect() });
         setActiveIndex(0);
     };
 
@@ -171,7 +173,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                     }}
                     onBlur={() => window.setTimeout(closeMention, 120)}
                 />
-                {mention && candidates.length ? <MentionMenu inputs={candidates} allInputs={inputs} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} /> : null}
+                {mention && candidates.length ? <MentionMenu inputs={candidates} allInputs={inputs} activeIndex={Math.min(activeIndex, candidates.length - 1)} rect={mention.rect} theme={theme} onSelect={insertReference} /> : null}
             </div>
             {imagePreview ? <Image src={imagePreview} alt="引用图片预览" style={{ display: "none" }} preview={{ visible: true, src: imagePreview, onVisibleChange: (visible) => !visible && setImagePreview(null) }} /> : null}
         </div>
@@ -179,7 +181,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
 
 }
 
-function MentionMenu({ inputs, allInputs, activeIndex, theme, onSelect }: { inputs: NodeGenerationInput[]; allInputs: NodeGenerationInput[]; activeIndex: number; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onSelect: (input: NodeGenerationInput) => void }) {
+function MentionMenu({ inputs, allInputs, activeIndex, rect, theme, onSelect }: { inputs: NodeGenerationInput[]; allInputs: NodeGenerationInput[]; activeIndex: number; rect: DOMRect | null; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onSelect: (input: NodeGenerationInput) => void }) {
     const selectedRef = useRef(false);
     const activeItemRef = useRef<HTMLButtonElement | null>(null);
 
@@ -193,8 +195,23 @@ function MentionMenu({ inputs, allInputs, activeIndex, theme, onSelect }: { inpu
         onSelect(input);
     };
 
-    return (
-        <div className="absolute left-2 top-[calc(100%+6px)] z-[90] max-h-56 w-64 overflow-y-auto rounded-xl border p-1 shadow-2xl" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
+    const menuWidth = 256;
+    const maxMenuHeight = 224;
+    const gap = 6;
+    const anchor = rect || new DOMRect(16, 16, 0, 0);
+    const left = clamp(anchor.left, 8, window.innerWidth - menuWidth - 8);
+    const showAbove = anchor.bottom + gap + maxMenuHeight > window.innerHeight && anchor.top - gap - maxMenuHeight >= 0;
+    const top = showAbove ? anchor.top - gap - maxMenuHeight : anchor.bottom + gap;
+
+    return createPortal(
+        <div
+            data-canvas-resource-mention-menu="true"
+            className="fixed z-[120] max-h-56 w-64 overflow-y-auto rounded-xl border p-1 shadow-2xl backdrop-blur-md"
+            style={{ left, top, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+            onPointerDown={(event: React.PointerEvent) => event.stopPropagation()}
+            onMouseDown={(event: React.MouseEvent) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+        >
             {inputs.map((input, index) => (
                 <button
                     key={input.nodeId}
@@ -215,7 +232,8 @@ function MentionMenu({ inputs, allInputs, activeIndex, theme, onSelect }: { inpu
                     </span>
                 </button>
             ))}
-        </div>
+        </div>,
+        document.body,
     );
 }
 
@@ -368,4 +386,21 @@ function resourceLabel(input: NodeGenerationInput, inputs: NodeGenerationInput[]
 
 function chipStyle(theme: (typeof canvasThemes)[keyof typeof canvasThemes]): CSSProperties {
     return { background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text };
+}
+
+function caretRect(): DOMRect | null {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return null;
+    const range = selection.getRangeAt(0).cloneRange();
+    range.collapse(true);
+    const rect = range.getBoundingClientRect();
+    if (rect.width || rect.height || rect.left || rect.top) return rect;
+    // 空行时 range 无尺寸，退回到编辑器盒子
+    const editor = closestEditor(range.startContainer);
+    return editor ? editor.getBoundingClientRect() : null;
+}
+
+function clamp(value: number, min: number, max: number) {
+    if (max < min) return min;
+    return Math.min(Math.max(value, min), max);
 }
