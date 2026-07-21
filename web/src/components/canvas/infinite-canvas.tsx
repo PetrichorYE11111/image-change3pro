@@ -66,29 +66,33 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
 
+        // 用已累积的 nextViewportRef 而非可能过时的 React state 作为基础，
+        // 保证同一帧内多次滚轮事件能正确叠加缩放量，避免缩放停滞导致节点消失。
+        const base = nextViewportRef.current ?? viewport;
         const delta = -event.deltaY;
         const factor = Math.pow(1.1, delta / 100);
-        const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
+        const newScale = Math.min(Math.max(base.k * factor, 0.05), 5);
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
 
         const mouseX = event.clientX - rect.left;
         const mouseY = event.clientY - rect.top;
-        const worldX = (mouseX - viewport.x) / viewport.k;
-        const worldY = (mouseY - viewport.y) / viewport.k;
+        const worldX = (mouseX - base.x) / base.k;
+        const worldY = (mouseY - base.y) / base.k;
 
         const nextViewport = {
             x: mouseX - worldX * newScale,
             y: mouseY - worldY * newScale,
             k: newScale,
         };
-        // 与平移路径保持一致：用 rAF 节流，避免高频滚轮事件排队大量渲染，
-        // 使 CSS transform 与 visibleNodes 裁剪计算保持同步。
+        // rAF 节流：同一帧多次滚轮事件只触发一次渲染，
+        // CSS transform 与 visibleNodes 裁剪始终在同一 React 提交内更新，不会出现不同步。
         nextViewportRef.current = nextViewport;
         if (frameRef.current) return;
         frameRef.current = requestAnimationFrame(() => {
             frameRef.current = null;
             if (nextViewportRef.current) onViewportChange(nextViewportRef.current);
+            nextViewportRef.current = null;
         });
     };
 
