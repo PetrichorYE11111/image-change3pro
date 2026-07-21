@@ -151,9 +151,31 @@ export function isAudioFile(file: File) {
 }
 
 export function buildAngleLabel(params: CanvasImageAngleParams) {
-    const horizontal = params.horizontalAngle === 0 ? "正面视角" : params.horizontalAngle > 0 ? `向右旋转 ${params.horizontalAngle} 度` : `向左旋转 ${Math.abs(params.horizontalAngle)} 度`;
-    const pitch = params.pitchAngle === 0 ? "水平视角" : params.pitchAngle > 0 ? `俯视 ${params.pitchAngle} 度` : `仰视 ${Math.abs(params.pitchAngle)} 度`;
+    const horizontal = describeHorizontalAngle(params.horizontalAngle);
+    const pitch = describePitchAngle(params.pitchAngle);
     return `AI 多角度：${horizontal}，${pitch}，镜头距离 ${params.cameraDistance.toFixed(1)}，${params.wideAngle ? "广角" : "标准"}镜头`;
+}
+
+/** 水平角 -180~180：0 正面、±180 背面、正右 90、正左 -90，中间用"偏"描述。 */
+function describeHorizontalAngle(angle: number) {
+    const value = Math.round(angle);
+    const abs = Math.abs(value);
+    if (abs <= 2) return "正面视角";
+    if (abs >= 178) return "背面视角（主体背对镜头）";
+    if (value === 90) return "正右侧视角";
+    if (value === -90) return "正左侧视角";
+    const side = value > 0 ? "右" : "左";
+    if (abs < 90) return `镜头绕到主体${side}前方 ${abs} 度`;
+    return `镜头绕到主体${side}后方 ${180 - abs} 度`;
+}
+
+/** 俯仰角 -90~90：90 正上方俯视、-90 正下方仰视、0 水平。 */
+function describePitchAngle(angle: number) {
+    const value = Math.round(angle);
+    if (value >= 88) return "正上方俯视（顶视角）";
+    if (value <= -88) return "正下方仰视（底视角）";
+    if (Math.abs(value) <= 2) return "水平视角";
+    return value > 0 ? `俯视 ${value} 度` : `仰视 ${Math.abs(value)} 度`;
 }
 
 export function buildAnglePrompt(params: CanvasImageAngleParams) {
