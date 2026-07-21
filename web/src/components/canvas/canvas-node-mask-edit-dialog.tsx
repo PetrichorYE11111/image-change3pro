@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Button, Input, Modal, Slider, Tooltip } from "antd";
-import { Brush, Eraser, Plus, RotateCcw, WandSparkles, X } from "lucide-react";
+import { Brush, Eraser, ImagePlus, RotateCcw, WandSparkles, X } from "lucide-react";
 
-import { readImageMeta } from "@/lib/image-utils";
+import { readFileAsDataUrl, readImageMeta } from "@/lib/image-utils";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import type { ReferenceImage } from "@/types/image";
+
+/** 用户在弹窗内直接上传的参考图 */
+type UploadedRef = { id: string; name: string; dataUrl: string };
 
 export type CanvasImageMaskEditPayload = {
     prompt: string;
@@ -41,6 +44,8 @@ export function CanvasNodeMaskEditDialog({
     const [mode, setMode] = useState<DrawMode>("paint");
     const [error, setError] = useState("");
     const [selectedRefs, setSelectedRefs] = useState<CanvasResourceReference[]>([]);
+    const [uploadedRefs, setUploadedRefs] = useState<UploadedRef[]>([]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         if (!open) return;
@@ -49,6 +54,7 @@ export function CanvasNodeMaskEditDialog({
         setMode("paint");
         setError("");
         setSelectedRefs([]);
+        setUploadedRefs([]);
         void readImageMeta(dataUrl).then(setImage);
     }, [dataUrl, open]);
 
@@ -113,10 +119,31 @@ export function CanvasNodeMaskEditDialog({
         if (!nextPrompt) return setError("请输入修改要求");
         if (!canvas) return;
         if (!canvasHasPaint(canvas)) return setError("请先涂抹局部区域");
-        const extraReferences: ReferenceImage[] = selectedRefs
+        // 已选画布/资产引用 + 弹窗内上传的图片，一起作为额外参考图
+        const fromSelected: ReferenceImage[] = selectedRefs
             .filter((ref) => ref.previewUrl)
             .map((ref) => ({ id: ref.id, name: ref.title || ref.id, type: "image/png", dataUrl: ref.previewUrl!, storageKey: undefined }));
+        const fromUploaded: ReferenceImage[] = uploadedRefs.map((ref) => ({ id: ref.id, name: ref.name, type: ref.dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png", dataUrl: ref.dataUrl, storageKey: undefined }));
+        const extraReferences = [...fromSelected, ...fromUploaded];
         onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas), extraReferences: extraReferences.length ? extraReferences : undefined });
+    };
+
+    const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
+        event.target.value = ""; // 允许重复选同一文件
+        if (!files.length) return;
+        try {
+            const uploaded = await Promise.all(
+                files.map(async (file) => ({ id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: file.name, dataUrl: await readFileAsDataUrl(file) })),
+            );
+            setUploadedRefs((prev) => [...prev, ...uploaded]);
+        } catch {
+            setError("图片读取失败，请重试");
+        }
+    };
+
+    const removeUploaded = (id: string) => {
+        setUploadedRefs((prev) => prev.filter((ref) => ref.id !== id));
     };
 
     const toggleRef = (ref: CanvasResourceReference) => {
@@ -185,43 +212,65 @@ export function CanvasNodeMaskEditDialog({
                         {error ? <div className="text-xs font-medium text-[#ef4444]">{error}</div> : null}
                     </div>
 
-                    {availableReferences.filter((r) => r.kind === "image" && r.previewUrl).length > 0 && (
-                        <div className="space-y-2">
-                            <div className="flex items-center gap-1 text-sm font-medium opacity-75">
-                                <Plus className="size-3.5" />
-                                <span>参考图片</span>
-                                <span className="ml-auto text-xs opacity-60">点击选择/取消</span>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {availableReferences
-                                    .filter((r) => r.kind === "image" && r.previewUrl)
-                                    .map((ref) => {
-                                        const isSelected = selectedRefs.some((r) => r.id === ref.id);
-                                        return (
-                                            <Tooltip key={ref.id} title={ref.title || ref.label}>
-                                                <button
-                                                    type="button"
-                                                    className={`relative h-12 w-12 overflow-hidden rounded-md border-2 transition ${isSelected ? "border-blue-500 ring-2 ring-blue-300" : "border-transparent opacity-60 hover:opacity-100"}`}
-                                                    onClick={() => toggleRef(ref)}
-                                                >
-                                                    <img src={ref.previewUrl} alt={ref.title} className="h-full w-full object-cover" />
-                                                    {isSelected && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-blue-500/20">
-                                                            <div className="size-4 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold">
-                                                                {selectedRefs.findIndex((r) => r.id === ref.id) + 1}
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </button>
-                                            </Tooltip>
-                                        );
-                                    })}
-                            </div>
-                            {selectedRefs.length > 0 && (
-                                <div className="text-xs opacity-55">已选 {selectedRefs.length} 张参考图，会与涂抹区域一起发给模型</div>
-                            )}
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-1 text-sm font-medium opacity-75">
+                            <span>参考图片</span>
+                            <span className="ml-auto text-xs opacity-60">上传或选择，随涂抹区域一起发给模型</span>
                         </div>
-                    )}
+                        <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleUpload} />
+                        <div className="flex flex-wrap gap-2">
+                            <Tooltip title="上传本地图片作为参考图">
+                                <button
+                                    type="button"
+                                    className="flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md border-2 border-dashed border-black/20 text-black/50 transition hover:border-blue-400 hover:text-blue-500 dark:border-white/25 dark:text-white/50"
+                                    onClick={() => fileInputRef.current?.click()}
+                                >
+                                    <ImagePlus className="size-4" />
+                                    <span className="text-[9px] leading-none">上传</span>
+                                </button>
+                            </Tooltip>
+
+                            {uploadedRefs.map((ref) => (
+                                <Tooltip key={ref.id} title={ref.name}>
+                                    <div className="relative h-12 w-12 overflow-hidden rounded-md border-2 border-blue-500 ring-2 ring-blue-300">
+                                        <img src={ref.dataUrl} alt={ref.name} className="h-full w-full object-cover" />
+                                        <button
+                                            type="button"
+                                            className="absolute right-0 top-0 flex size-4 items-center justify-center rounded-bl bg-black/60 text-white"
+                                            onClick={() => removeUploaded(ref.id)}
+                                        >
+                                            <X className="size-2.5" />
+                                        </button>
+                                    </div>
+                                </Tooltip>
+                            ))}
+
+                            {availableReferences
+                                .filter((r) => r.kind === "image" && r.previewUrl)
+                                .map((ref) => {
+                                    const isSelected = selectedRefs.some((r) => r.id === ref.id);
+                                    return (
+                                        <Tooltip key={ref.id} title={ref.title || ref.label}>
+                                            <button
+                                                type="button"
+                                                className={`relative h-12 w-12 overflow-hidden rounded-md border-2 transition ${isSelected ? "border-blue-500 ring-2 ring-blue-300" : "border-transparent opacity-60 hover:opacity-100"}`}
+                                                onClick={() => toggleRef(ref)}
+                                            >
+                                                <img src={ref.previewUrl} alt={ref.title} className="h-full w-full object-cover" />
+                                                {isSelected && (
+                                                    <div className="absolute inset-0 flex items-center justify-center bg-blue-500/20">
+                                                        <div className="size-4 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold">✓</div>
+                                                    </div>
+                                                )}
+                                            </button>
+                                        </Tooltip>
+                                    );
+                                })}
+                        </div>
+                        {selectedRefs.length + uploadedRefs.length > 0 && (
+                            <div className="text-xs opacity-55">已选 {selectedRefs.length + uploadedRefs.length} 张参考图</div>
+                        )}
+                    </div>
 
                     <div className="mt-auto flex items-center justify-between gap-2">
                         <Button icon={<RotateCcw className="size-4" />} onClick={resetMask}>
