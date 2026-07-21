@@ -48,7 +48,9 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
             if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
             if (node.type !== CanvasNodeType.Image || !content) return node;
             if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
-            if (!content.startsWith("data:image/")) return node;
+            // file:// URL 浏览器无法 fetch，直接跳过避免安全报错
+            if (content.startsWith("file://")) return node;
+            if (!content.startsWith("data:image/") && !content.startsWith("blob:")) return node;
             return { ...node, metadata: { ...node.metadata, ...imageMetadata(await uploadImage(content)) } };
         }),
     );

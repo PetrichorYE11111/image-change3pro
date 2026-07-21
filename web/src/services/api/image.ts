@@ -629,7 +629,9 @@ async function requestGeminiImages(config: AiConfig, prompt: string, references:
 async function requestGeminiImagesOnce(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
     const parts: GeminiPart[] = [{ text: prompt }];
     for (const image of references) {
-        parts.push(toGeminiImagePart(await imageToDataUrl(image)));
+        const dataUrl = await imageToDataUrl(image);
+        // imageToDataUrl 返回空说明图片无法加载（如 file:// URL），跳过而不是发送无效引用
+        if (dataUrl) parts.push(toGeminiImagePart(dataUrl));
     }
     const imageConfig = resolveGeminiImageConfig(config);
     const response = await axios.post<GeminiPayload>(

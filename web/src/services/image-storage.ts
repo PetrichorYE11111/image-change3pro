@@ -48,9 +48,29 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
 }
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
-    const url = image.dataUrl || (await resolveImageUrl(image.storageKey, image.url || ""));
-    if (!url || url.startsWith("data:")) return url;
-    return blobToDataUrl(await (await fetch(url)).blob());
+    // data: URL 始终有效，直接返回
+    if (image.dataUrl?.startsWith("data:")) return image.dataUrl;
+    // storageKey 指向 IndexedDB，刷新后仍可用，优先于可能已失效的 blob:/file:// URL
+    if (image.storageKey) {
+        const fromStorage = await resolveImageUrl(image.storageKey, "");
+        if (fromStorage) {
+            try {
+                return blobToDataUrl(await (await fetch(fromStorage)).blob());
+            } catch {
+                // IndexedDB 条目丢失，继续尝试其他来源
+            }
+        }
+    }
+    const url = image.dataUrl || image.url || "";
+    if (!url) return "";
+    if (url.startsWith("data:")) return url;
+    // file:// URL 在浏览器安全限制下无法 fetch，直接返回空字符串避免抛错
+    if (url.startsWith("file://")) return "";
+    try {
+        return blobToDataUrl(await (await fetch(url)).blob());
+    } catch {
+        return "";
+    }
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {
