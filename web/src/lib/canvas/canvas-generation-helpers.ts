@@ -82,6 +82,23 @@ export function getGenerationCount(count: string) {
     return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(count)) || 1)));
 }
 
+/**
+ * 为「编辑类」操作（局部遮罩、多角度、图生图）推导 size：
+ * 优先用原图的真实像素比例（naturalWidth/naturalHeight），退回到节点显示尺寸，
+ * 得到形如 "1920:1080" 的比例串，让下游按原图比例出图，而不是默认方图。
+ * 比例超过 3:1 会被 API 拒绝，这里夹到 3:1 以内。
+ */
+export function resolveEditSize(node: CanvasNodeData | undefined): string {
+    const width = node?.metadata?.naturalWidth || node?.width;
+    const height = node?.metadata?.naturalHeight || node?.height;
+    if (!width || !height || width <= 0 || height <= 0) return node?.metadata?.size || "auto";
+    const maxRatio = 3;
+    const ratio = width / height;
+    if (ratio > maxRatio) return `${maxRatio}:1`;
+    if (ratio < 1 / maxRatio) return `1:${maxRatio}`;
+    return `${Math.round(width)}:${Math.round(height)}`;
+}
+
 export function getInputSummary(inputs: NodeGenerationInput[]) {
     return {
         textCount: inputs.filter((input) => input.type === "text").length,
