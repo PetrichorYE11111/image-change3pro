@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Button, Input, Modal, Slider } from "antd";
-import { Brush, Eraser, RotateCcw, WandSparkles, X } from "lucide-react";
+import { Button, Input, Modal, Slider, Tooltip } from "antd";
+import { Brush, Eraser, Plus, RotateCcw, WandSparkles, X } from "lucide-react";
 
 import { readImageMeta } from "@/lib/image-utils";
+import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import type { ReferenceImage } from "@/types/image";
 
 export type CanvasImageMaskEditPayload = {
     prompt: string;
     maskDataUrl: string;
+    /** 用户通过 @ 选取的额外参考图，与涂抹区域一起发给 API */
+    extraReferences?: ReferenceImage[];
 };
 
 type DrawMode = "paint" | "erase";
@@ -15,7 +19,19 @@ const defaultBrushSize = 100;
 const maskFillColor = "rgba(37, 99, 235, .38)";
 const maskBorderColor = "rgba(255, 255, 255, .72)";
 
-export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (payload: CanvasImageMaskEditPayload) => void }) {
+export function CanvasNodeMaskEditDialog({
+    dataUrl,
+    open,
+    availableReferences = [],
+    onClose,
+    onConfirm,
+}: {
+    dataUrl: string;
+    open: boolean;
+    availableReferences?: CanvasResourceReference[];
+    onClose: () => void;
+    onConfirm: (payload: CanvasImageMaskEditPayload) => void;
+}) {
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const previewCanvasRef = useRef<HTMLCanvasElement>(null);
     const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
@@ -24,6 +40,7 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
     const [brushSize, setBrushSize] = useState(defaultBrushSize);
     const [mode, setMode] = useState<DrawMode>("paint");
     const [error, setError] = useState("");
+    const [selectedRefs, setSelectedRefs] = useState<CanvasResourceReference[]>([]);
 
     useEffect(() => {
         if (!open) return;
@@ -31,6 +48,7 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
         setBrushSize(defaultBrushSize);
         setMode("paint");
         setError("");
+        setSelectedRefs([]);
         void readImageMeta(dataUrl).then(setImage);
     }, [dataUrl, open]);
 
@@ -95,7 +113,14 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
         if (!nextPrompt) return setError("请输入修改要求");
         if (!canvas) return;
         if (!canvasHasPaint(canvas)) return setError("请先涂抹局部区域");
-        onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas) });
+        const extraReferences: ReferenceImage[] = selectedRefs
+            .filter((ref) => ref.previewUrl)
+            .map((ref) => ({ id: ref.id, name: ref.title || ref.id, type: "image/png", dataUrl: ref.previewUrl!, storageKey: undefined }));
+        onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas), extraReferences: extraReferences.length ? extraReferences : undefined });
+    };
+
+    const toggleRef = (ref: CanvasResourceReference) => {
+        setSelectedRefs((prev) => prev.some((r) => r.id === ref.id) ? prev.filter((r) => r.id !== ref.id) : [...prev, ref]);
     };
 
     return (
@@ -148,7 +173,7 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
                     <div className="space-y-2">
                         <div className="text-sm font-medium opacity-75">修改要求</div>
                         <Input.TextArea
-                            rows={6}
+                            rows={4}
                             value={prompt}
                             status={error && !prompt.trim() ? "error" : undefined}
                             placeholder="例如：把选中区域改成金属材质，保持原图光影"
@@ -159,6 +184,44 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
                         />
                         {error ? <div className="text-xs font-medium text-[#ef4444]">{error}</div> : null}
                     </div>
+
+                    {availableReferences.filter((r) => r.kind === "image" && r.previewUrl).length > 0 && (
+                        <div className="space-y-2">
+                            <div className="flex items-center gap-1 text-sm font-medium opacity-75">
+                                <Plus className="size-3.5" />
+                                <span>参考图片</span>
+                                <span className="ml-auto text-xs opacity-60">点击选择/取消</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {availableReferences
+                                    .filter((r) => r.kind === "image" && r.previewUrl)
+                                    .map((ref) => {
+                                        const isSelected = selectedRefs.some((r) => r.id === ref.id);
+                                        return (
+                                            <Tooltip key={ref.id} title={ref.title || ref.label}>
+                                                <button
+                                                    type="button"
+                                                    className={`relative h-12 w-12 overflow-hidden rounded-md border-2 transition ${isSelected ? "border-blue-500 ring-2 ring-blue-300" : "border-transparent opacity-60 hover:opacity-100"}`}
+                                                    onClick={() => toggleRef(ref)}
+                                                >
+                                                    <img src={ref.previewUrl} alt={ref.title} className="h-full w-full object-cover" />
+                                                    {isSelected && (
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-blue-500/20">
+                                                            <div className="size-4 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold">
+                                                                {selectedRefs.findIndex((r) => r.id === ref.id) + 1}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </button>
+                                            </Tooltip>
+                                        );
+                                    })}
+                            </div>
+                            {selectedRefs.length > 0 && (
+                                <div className="text-xs opacity-55">已选 {selectedRefs.length} 张参考图，会与涂抹区域一起发给模型</div>
+                            )}
+                        </div>
+                    )}
 
                     <div className="mt-auto flex items-center justify-between gap-2">
                         <Button icon={<RotateCcw className="size-4" />} onClick={resetMask}>

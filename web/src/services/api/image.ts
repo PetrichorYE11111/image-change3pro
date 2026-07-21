@@ -621,6 +621,60 @@ function parseGeminiToolResponse(payload: GeminiPayload): ToolResponseResult {
     return { content, toolCalls };
 }
 
+/**
+ * 将原图与 OpenAI 格式蒙版（透明=要改，白色=保留）合成为带红色高亮的参考图，
+ * 供 Gemini 通过视觉识别修改区域，不依赖独立蒙版参数。
+ */
+async function buildGeminiMaskComposite(original: ReferenceImage, mask: ReferenceImage): Promise<ReferenceImage> {
+    const originalDataUrl = await imageToDataUrl(original);
+    const maskDataUrl = await imageToDataUrl(mask);
+    if (!originalDataUrl) return original;
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) { resolve(original); return; }
+            ctx.drawImage(img, 0, 0);
+
+            const maskImg = new Image();
+            maskImg.onload = () => {
+                // 读取蒙版：透明像素 = 用户涂抹区域（需要修改）
+                const tmp = document.createElement("canvas");
+                tmp.width = img.width;
+                tmp.height = img.height;
+                const tmpCtx = tmp.getContext("2d");
+                if (!tmpCtx) { resolve(original); return; }
+                tmpCtx.drawImage(maskImg, 0, 0, img.width, img.height);
+                const maskPx = tmpCtx.getImageData(0, 0, img.width, img.height).data;
+
+                // 在原图上对涂抹区域叠加红色半透明高亮
+                const imgData = ctx.getImageData(0, 0, img.width, img.height);
+                const d = imgData.data;
+                for (let i = 0; i < maskPx.length; i += 4) {
+                    if (maskPx[i + 3] < 128) {
+                        // 蒙版透明 = 涂抹区域：原色 × 0.4 + 红色叠加
+                        d[i]     = Math.min(255, Math.round(d[i] * 0.4 + 200));
+                        d[i + 1] = Math.round(d[i + 1] * 0.4);
+                        d[i + 2] = Math.round(d[i + 2] * 0.4);
+                        d[i + 3] = 255;
+                    }
+                }
+                ctx.putImageData(imgData, 0, 0);
+                const compositeDataUrl = canvas.toDataURL("image/png");
+                resolve({ id: original.id, name: "composite.png", type: "image/png", dataUrl: compositeDataUrl });
+            };
+            maskImg.onerror = () => resolve(original);
+            maskImg.src = maskDataUrl || "";
+        };
+        img.onerror = () => resolve(original);
+        img.src = originalDataUrl;
+    });
+}
+
 async function requestGeminiImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
     const requests = Array.from({ length: count }, () => requestGeminiImagesOnce(config, prompt, references, options));
     return (await Promise.all(requests)).flat();
@@ -745,8 +799,18 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         }
     }
     if (requestConfig.apiFormat === "gemini") {
-        if (mask) throw new Error("Gemini 调用格式暂不支持蒙版编辑");
         try {
+            if (mask) {
+                // Gemini 无独立蒙版参数：把原图(references[0])与蒙版合成一张带红色高亮标注的图作为第一张参考图，
+                // 其余 references[1..] 是用户 @ 选取的额外参考图，追加在后面一并发送。
+                const compositeRef = await buildGeminiMaskComposite(references[0], mask);
+                const extraRefs = references.slice(1);
+                const userPrompt = prompt.replace("只修改蒙版透明区域，其他区域保持不变。", "").trim();
+                const refHint = extraRefs.length
+                    ? `第一张图是待修改图片，红色半透明高亮的区域是需要修改的部分；随后 ${extraRefs.length} 张为参考图，请参考它们的内容/风格进行修改。`
+                    : "只修改图片中红色半透明高亮标记的区域，其他区域严格保持不变。";
+                return await requestGeminiImages(requestConfig, `${refHint}${userPrompt}`, [compositeRef, ...extraRefs], n, options);
+            }
             return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
         } catch (error) {
             throw new Error(readAxiosError(error, "请求失败"));
