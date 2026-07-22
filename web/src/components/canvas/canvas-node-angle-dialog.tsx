@@ -1,222 +1,325 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Button, Modal, Segmented, Slider } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Button, Modal, Slider, Switch } from "antd";
 import { RotateCcw, WandSparkles } from "lucide-react";
+import { CameraWidget, type CameraState } from "@/lib/camera-widget";
 
 export type CanvasImageAngleParams = {
-    horizontalAngle: number;
-    pitchAngle: number;
-    cameraDistance: number;
+    azimuth: number;   // 0–360（0 = 正面）
+    elevation: number; // -30 ~ 60（0 = 水平）
+    distance: number;  // 0–10
     wideAngle: boolean;
 };
 
-const defaultParams: CanvasImageAngleParams = {
-    horizontalAngle: 0,
-    pitchAngle: 9,
-    cameraDistance: 4.8,
+const 默认参数: CanvasImageAngleParams = {
+    azimuth: 0,
+    elevation: 0,
+    distance: 5,
     wideAngle: false,
 };
 
-// 常用机位预设：水平 360°、俯仰全角度
-const presets: Array<{ label: string; horizontalAngle: number; pitchAngle: number }> = [
-    { label: "正面", horizontalAngle: 0, pitchAngle: 0 },
-    { label: "左侧", horizontalAngle: -90, pitchAngle: 0 },
-    { label: "右侧", horizontalAngle: 90, pitchAngle: 0 },
-    { label: "背面", horizontalAngle: 180, pitchAngle: 0 },
-    { label: "3/4 俯视", horizontalAngle: 35, pitchAngle: 35 },
-    { label: "正俯视", horizontalAngle: 0, pitchAngle: 90 },
-    { label: "正仰视", horizontalAngle: 0, pitchAngle: -90 },
+const 预设机位 = [
+    { 名称: "正面",     azimuth: 0,   elevation: 0   },
+    { 名称: "右前方",   azimuth: 45,  elevation: 0   },
+    { 名称: "右侧",     azimuth: 90,  elevation: 0   },
+    { 名称: "右后方",   azimuth: 135, elevation: 0   },
+    { 名称: "背面",     azimuth: 180, elevation: 0   },
+    { 名称: "左侧",     azimuth: 270, elevation: 0   },
+    { 名称: "四分之三俯视", azimuth: 45,  elevation: 35  },
+    { 名称: "俯视",     azimuth: 0,   elevation: 60  },
+    { 名称: "仰视",     azimuth: 0,   elevation: -20 },
 ];
 
-export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (params: CanvasImageAngleParams) => void }) {
-    const [params, setParams] = useState(defaultParams);
+// 角度 → 中文描述（用于提示词预览）
+function 水平描述(azimuth: number): string {
+    const h = ((azimuth % 360) + 360) % 360;
+    if (h < 22.5 || h >= 337.5) return "正面视角";
+    if (h < 67.5) return "右前方四分之三视角";
+    if (h < 112.5) return "右侧视角";
+    if (h < 157.5) return "右后方四分之三视角";
+    if (h < 202.5) return "背面视角";
+    if (h < 247.5) return "左后方四分之三视角";
+    if (h < 292.5) return "左侧视角";
+    return "左前方四分之三视角";
+}
+
+function 仰俯描述(elevation: number): string {
+    if (elevation < -15) return "仰拍";
+    if (elevation < 15) return "平视";
+    if (elevation < 45) return "高角度";
+    return "俯拍";
+}
+
+function 距离描述(distance: number): string {
+    if (distance < 2) return "远景";
+    if (distance < 6) return "中景";
+    return "特写";
+}
+
+export function buildAnglePromptPreview(params: CanvasImageAngleParams): string {
+    const parts = [水平描述(params.azimuth), 仰俯描述(params.elevation), 距离描述(params.distance)];
+    if (params.wideAngle) parts.push("广角镜头");
+    return parts.join("，");
+}
+
+export function CanvasNodeAngleDialog({
+    dataUrl,
+    open,
+    onClose,
+    onConfirm,
+}: {
+    dataUrl: string;
+    open: boolean;
+    onClose: () => void;
+    onConfirm: (params: CanvasImageAngleParams) => void;
+}) {
+    const [params, setParams] = useState(默认参数);
+    const [相机视角模式, 设相机视角] = useState(false);
+    const widgetRef = useRef<CameraWidget | null>(null);
 
     useEffect(() => {
-        if (open) setParams(defaultParams);
+        if (open) {
+            setParams(默认参数);
+            设相机视角(false);
+        }
     }, [dataUrl, open]);
 
-    const update = <Key extends keyof CanvasImageAngleParams>(key: Key, value: CanvasImageAngleParams[Key]) => setParams((current) => ({ ...current, [key]: value }));
-    const patch = (next: Partial<CanvasImageAngleParams>) => setParams((current) => ({ ...current, ...next }));
+    useEffect(() => {
+        widgetRef.current?.setState({
+            azimuth: params.azimuth,
+            elevation: params.elevation,
+            distance: params.distance,
+        });
+    }, [params.azimuth, params.elevation, params.distance]);
 
-    const activePreset = presets.find((preset) => preset.horizontalAngle === params.horizontalAngle && preset.pitchAngle === params.pitchAngle);
+    useEffect(() => {
+        widgetRef.current?.setCameraView(相机视角模式);
+    }, [相机视角模式]);
+
+    const 更新 = (next: Partial<CanvasImageAngleParams>) =>
+        setParams((cur) => ({ ...cur, ...next }));
+
+    const 当前预设 = 预设机位.find(
+        (p) => p.azimuth === params.azimuth && p.elevation === params.elevation,
+    );
+
+    const 重置 = () => {
+        setParams(默认参数);
+        widgetRef.current?.resetToDefaults();
+        设相机视角(false);
+    };
+
+    const 提示词预览 = buildAnglePromptPreview(params);
 
     return (
-        <Modal title={null} open={open && Boolean(dataUrl)} onCancel={onClose} footer={null} width={880} centered destroyOnHidden>
-            <div className="space-y-5">
-                <div>
-                    <h2 className="text-xl font-semibold">AI 多角度</h2>
-                    <p className="mt-1 text-sm opacity-60">拖动导轨上的相机或调节滑块设定机位，结果会基于原图重新生成</p>
+        <Modal
+            title={null}
+            open={open && Boolean(dataUrl)}
+            onCancel={onClose}
+            footer={null}
+            width={1080}
+            centered
+            destroyOnHidden
+        >
+            <div className="space-y-4">
+                {/* 标题栏 */}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-semibold">AI 多角度</h2>
+                        <p className="mt-0.5 text-sm opacity-50">
+                            拖动场景手柄或调节滑块设定镜头位置，基于原图生成新视角
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                        <span className="opacity-60">相机视角</span>
+                        <Switch size="small" checked={相机视角模式} onChange={设相机视角} />
+                    </div>
                 </div>
-                <div className="grid gap-6 md:grid-cols-[minmax(300px,1fr)_360px]">
-                    <div className="flex min-h-[340px] flex-col justify-between rounded-xl border p-4">
-                        <CameraRig dataUrl={dataUrl} params={params} onChange={patch} />
-                        <div className="mt-3 flex items-center justify-between gap-2">
-                            <span className="text-xs opacity-55">拖动相机环绕主体 · 上下拖动改变俯仰</span>
-                            <Button size="small" icon={<RotateCcw className="size-4" />} onClick={() => setParams(defaultParams)}>
-                                重置
-                            </Button>
+
+                {/* 主体内容：3D 场景 + 控制面板 */}
+                <div className="grid gap-5 md:grid-cols-[1fr_300px]">
+
+                    {/* ── 左：3D 场景 ── */}
+                    <div className="flex flex-col gap-2">
+                        <div className="relative overflow-hidden rounded-xl border" style={{ height: 420 }}>
+                            <ThreeJS场景
+                                dataUrl={dataUrl}
+                                initialState={{ azimuth: params.azimuth, elevation: params.elevation, distance: params.distance }}
+                                onMount={(w) => { widgetRef.current = w; }}
+                                onUnmount={() => { widgetRef.current = null; }}
+                                onStateChange={(s) => 更新({ azimuth: s.azimuth, elevation: s.elevation, distance: s.distance })}
+                            />
+                        </div>
+                        {/* 提示词预览条 */}
+                        <div className="flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-sm">
+                            <span className="shrink-0 text-xs font-medium opacity-50">机位提示词</span>
+                            <span className="text-blue-400">{提示词预览}</span>
                         </div>
                     </div>
-                    <div className="space-y-5 py-1">
-                        <div className="space-y-2">
-                            <span className="text-sm font-medium opacity-75">快捷机位</span>
-                            <div className="flex flex-wrap gap-1.5">
-                                {presets.map((preset) => (
+
+                    {/* ── 右：控制面板 ── */}
+                    <div className="flex flex-col gap-5 py-1">
+
+                        {/* 快捷机位 */}
+                        <div>
+                            <p className="mb-2 text-xs font-medium uppercase tracking-wide opacity-50">快捷机位</p>
+                            <div className="grid grid-cols-3 gap-1.5">
+                                {预设机位.map((p) => (
                                     <button
-                                        key={preset.label}
+                                        key={p.名称}
                                         type="button"
-                                        className={`rounded-md border px-2.5 py-1 text-xs transition ${activePreset?.label === preset.label ? "border-blue-500 bg-blue-500/12 font-medium text-blue-500" : "border-black/12 hover:border-blue-400 dark:border-white/15"}`}
-                                        onClick={() => patch({ horizontalAngle: preset.horizontalAngle, pitchAngle: preset.pitchAngle })}
+                                        onClick={() => 更新({ azimuth: p.azimuth, elevation: p.elevation })}
+                                        className={`rounded-md border px-1.5 py-1.5 text-center text-xs transition ${
+                                            当前预设?.名称 === p.名称
+                                                ? "border-blue-500 bg-blue-500/15 font-semibold text-blue-400"
+                                                : "border-black/10 hover:border-blue-400/60 dark:border-white/10"
+                                        }`}
                                     >
-                                        {preset.label}
+                                        {p.名称}
                                     </button>
                                 ))}
                             </div>
                         </div>
-                        <AngleSlider label="水平旋转" value={params.horizontalAngle} min={-180} max={180} step={1} suffix="°" onChange={(value) => update("horizontalAngle", value)} />
-                        <AngleSlider label="俯仰角度" value={params.pitchAngle} min={-90} max={90} step={1} suffix="°" onChange={(value) => update("pitchAngle", value)} />
-                        <AngleSlider label="镜头距离" value={params.cameraDistance} min={1} max={10} step={0.1} onChange={(value) => update("cameraDistance", value)} />
-                        <div className="grid grid-cols-[88px_1fr_72px] items-center gap-4">
-                            <span className="font-medium opacity-75">广角镜头</span>
-                            <Segmented
-                                className="w-fit"
-                                value={params.wideAngle ? "wide" : "standard"}
-                                options={[
-                                    { label: "标准", value: "standard" },
-                                    { label: "广角", value: "wide" },
-                                ]}
-                                onChange={(value) => update("wideAngle", value === "wide")}
-                            />
+
+                        {/* 精确调节 */}
+                        <div>
+                            <p className="mb-3 text-xs font-medium uppercase tracking-wide opacity-50">精确调节</p>
+                            <div className="space-y-4">
+                                <精确滑块
+                                    标签="水平方位"
+                                    值={params.azimuth}
+                                    最小={0}
+                                    最大={360}
+                                    步进={1}
+                                    单位="°"
+                                    颜色="#E93D82"
+                                    onChange={(v) => 更新({ azimuth: v })}
+                                />
+                                <精确滑块
+                                    标签="俯仰角度"
+                                    值={params.elevation}
+                                    最小={-30}
+                                    最大={60}
+                                    步进={1}
+                                    单位="°"
+                                    颜色="#00FFD0"
+                                    onChange={(v) => 更新({ elevation: v })}
+                                />
+                                <精确滑块
+                                    标签="镜头距离"
+                                    值={params.distance}
+                                    最小={0}
+                                    最大={10}
+                                    步进={0.1}
+                                    颜色="#FFB800"
+                                    onChange={(v) => 更新({ distance: v })}
+                                />
+                                <div className="flex items-center justify-between">
+                                    <span className="text-sm opacity-70">广角镜头</span>
+                                    <Switch
+                                        checked={params.wideAngle}
+                                        onChange={(v) => 更新({ wideAngle: v })}
+                                        checkedChildren="开"
+                                        unCheckedChildren="关"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 操作按钮 */}
+                        <div className="mt-auto flex flex-col gap-2 pt-2">
+                            <Button
+                                type="primary"
+                                size="large"
+                                icon={<WandSparkles className="size-4" />}
+                                block
+                                onClick={() => onConfirm(params)}
+                            >
+                                AI 生成
+                            </Button>
+                            <Button
+                                size="small"
+                                icon={<RotateCcw className="size-3.5" />}
+                                block
+                                onClick={重置}
+                            >
+                                重置
+                            </Button>
                         </div>
                     </div>
-                </div>
-                <div className="flex justify-end">
-                    <Button type="primary" size="large" icon={<WandSparkles className="size-4" />} onClick={() => onConfirm(params)}>
-                        AI 生成
-                    </Button>
                 </div>
             </div>
         </Modal>
     );
 }
 
-// 摄像头导轨：主体固定在中心，相机沿球面轨道运行；可拖拽调整水平/俯仰角。
-function CameraRig({ dataUrl, params, onChange }: { dataUrl: string; params: CanvasImageAngleParams; onChange: (patch: Partial<CanvasImageAngleParams>) => void }) {
-    const dragRef = useRef<{ startX: number; startY: number; yaw: number; pitch: number } | null>(null);
-    const W = 340;
-    const H = 260;
-    const cx = W / 2;
-    const cy = H / 2 + 6;
-    const depthFlatten = 0.4; // 前后方向在屏幕上的压扁比例（透视俯视效果）
-    const heightScale = 0.82; // 俯仰在屏幕上的纵向比例
-    // 镜头距离影响轨道半径：越远轨道越大
-    const radius = 44 + params.cameraDistance * 5.4;
+// ── Three.js 容器 ─────────────────────────────────────────────────────────
+function ThreeJS场景({
+    dataUrl,
+    initialState,
+    onMount,
+    onUnmount,
+    onStateChange,
+}: {
+    dataUrl: string;
+    initialState: Partial<CameraState>;
+    onMount: (w: CameraWidget) => void;
+    onUnmount: () => void;
+    onStateChange: (s: CameraState) => void;
+}) {
+    const containerRef = useRef<HTMLDivElement>(null);
 
-    const project = (yaw: number, pitch: number, r = radius) => {
-        const y = (yaw * Math.PI) / 180;
-        const p = (pitch * Math.PI) / 180;
-        const px = Math.sin(y) * Math.cos(p);
-        const py = Math.sin(p);
-        const pz = Math.cos(y) * Math.cos(p); // >0 朝向观察者（前方）
-        return { x: cx + r * px, y: cy - r * py * heightScale + r * pz * depthFlatten, pz };
-    };
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const widget = new CameraWidget({
+            container: el,
+            initialState: { ...initialState, imageUrl: dataUrl },
+            onStateChange,
+        });
+        onMount(widget);
+        return () => { widget.dispose(); onUnmount(); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-    const cam = project(params.horizontalAngle, params.pitchAngle);
-    const camBehind = cam.pz < 0;
-    const camScale = 1 + cam.pz * 0.16;
-
-    // 当前水平角下的俯仰子午线弧
-    const meridian: string[] = [];
-    for (let pp = -90; pp <= 90; pp += 6) {
-        const pt = project(params.horizontalAngle, pp);
-        meridian.push(`${pt.x.toFixed(1)},${pt.y.toFixed(1)}`);
-    }
-
-    // 方向标记锚点
-    const front = project(0, 0);
-    const back = project(180, 0);
-    const left = project(-90, 0);
-    const right = project(90, 0);
-
-    const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
-        event.currentTarget.setPointerCapture(event.pointerId);
-        dragRef.current = { startX: event.clientX, startY: event.clientY, yaw: params.horizontalAngle, pitch: params.pitchAngle };
-    };
-    const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-        if (!dragRef.current) return;
-        const dx = event.clientX - dragRef.current.startX;
-        const dy = event.clientY - dragRef.current.startY;
-        const yaw = clamp(Math.round(dragRef.current.yaw + dx * 0.7), -180, 180);
-        const pitch = clamp(Math.round(dragRef.current.pitch - dy * 0.7), -90, 90);
-        onChange({ horizontalAngle: yaw, pitchAngle: pitch });
-    };
-    const onPointerUp = () => {
-        dragRef.current = null;
-    };
-
-    const subjectR = 26;
-    const clipId = "camera-rig-subject-clip";
-    const cameraGlyph = (
-        <g transform={`translate(${cam.x} ${cam.y}) scale(${camScale.toFixed(3)})`} opacity={camBehind ? 0.45 : 1}>
-            <circle r={11} fill="#2f80ff" stroke="#fff" strokeWidth={2} />
-            <rect x={-4.5} y={-3.5} width={9} height={7} rx={1.5} fill="#fff" />
-            <circle r={2.2} fill="#2f80ff" />
-        </g>
-    );
-
-    return (
-        <svg
-            viewBox={`0 0 ${W} ${H}`}
-            className="mx-auto h-auto w-full max-w-[360px] cursor-grab touch-none select-none active:cursor-grabbing"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-        >
-            <defs>
-                <clipPath id={clipId}>
-                    <circle cx={cx} cy={cy} r={subjectR} />
-                </clipPath>
-            </defs>
-
-            {/* 水平轨道（赤道环） */}
-            <ellipse cx={cx} cy={cy} rx={radius} ry={radius * depthFlatten} fill="none" stroke="currentColor" strokeOpacity={0.22} strokeWidth={1.4} strokeDasharray="4 4" />
-            {/* 当前俯仰子午线 */}
-            <polyline points={meridian.join(" ")} fill="none" stroke="currentColor" strokeOpacity={0.16} strokeWidth={1.2} strokeDasharray="3 4" />
-
-            {/* 方向标记 */}
-            <text x={front.x} y={front.y + 14} textAnchor="middle" fontSize={11} fill="currentColor" opacity={0.5}>前</text>
-            <text x={back.x} y={back.y - 7} textAnchor="middle" fontSize={11} fill="currentColor" opacity={0.5}>后</text>
-            <text x={left.x - 12} y={left.y + 4} textAnchor="middle" fontSize={11} fill="currentColor" opacity={0.5}>左</text>
-            <text x={right.x + 12} y={right.y + 4} textAnchor="middle" fontSize={11} fill="currentColor" opacity={0.5}>右</text>
-
-            {/* 相机在主体后方时先画相机再画主体，让主体遮挡相机 */}
-            {camBehind ? cameraGlyph : null}
-
-            {/* 视线：主体 → 相机 */}
-            <line x1={cx} y1={cy} x2={cam.x} y2={cam.y} stroke="#2f80ff" strokeOpacity={camBehind ? 0.3 : 0.6} strokeWidth={1.4} strokeDasharray="4 3" />
-
-            {/* 主体（原图缩略） */}
-            <circle cx={cx} cy={cy} r={subjectR + 2} fill="none" stroke="currentColor" strokeOpacity={0.25} strokeWidth={1.5} />
-            <image href={dataUrl} x={cx - subjectR} y={cy - subjectR} width={subjectR * 2} height={subjectR * 2} clipPath={`url(#${clipId})`} preserveAspectRatio="xMidYMid slice" />
-
-            {camBehind ? null : cameraGlyph}
-        </svg>
-    );
+    return <div ref={containerRef} className="absolute inset-0" />;
 }
 
-function AngleSlider({ label, value, min, max, step, suffix = "", onChange }: { label: string; value: number; min: number; max: number; step: number; suffix?: string; onChange: (value: number) => void }) {
+// ── 精确滑块 ──────────────────────────────────────────────────────────────
+function 精确滑块({
+    标签,
+    值,
+    最小,
+    最大,
+    步进,
+    单位 = "",
+    颜色,
+    onChange,
+}: {
+    标签: string;
+    值: number;
+    最小: number;
+    最大: number;
+    步进: number;
+    单位?: string;
+    颜色?: string;
+    onChange: (v: number) => void;
+}) {
     return (
-        <div className="grid grid-cols-[88px_1fr_72px] items-center gap-4">
-            <span className="font-medium opacity-75">{label}</span>
-            <Slider min={min} max={max} step={step} value={value} onChange={onChange} />
-            <span className="whitespace-nowrap text-right font-semibold">
-                {Number.isInteger(value) ? value : value.toFixed(1)}
-                {suffix}
-            </span>
+        <div className="space-y-1">
+            <div className="flex items-center justify-between text-xs">
+                <span className="opacity-60">{标签}</span>
+                <span className="font-semibold tabular-nums" style={颜色 ? { color: 颜色 } : undefined}>
+                    {Number.isInteger(值) ? 值 : 值.toFixed(1)}{单位}
+                </span>
+            </div>
+            <Slider
+                min={最小}
+                max={最大}
+                step={步进}
+                value={值}
+                onChange={onChange}
+                styles={{ track: 颜色 ? { background: 颜色 } : undefined }}
+            />
         </div>
     );
-}
-
-function clamp(value: number, min: number, max: number) {
-    return Math.min(Math.max(value, min), max);
 }
