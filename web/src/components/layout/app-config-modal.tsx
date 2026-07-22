@@ -1,11 +1,13 @@
 import { App, Button, Form, Input, Modal, Progress, Select, Tabs } from "antd";
-import { Cloud, Pencil, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { Cloud, Database, HardDrive, Pencil, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ModelPicker } from "@/components/model-picker";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
+import { clearAllImages, getImageCacheStats } from "@/services/image-storage";
+import localforage from "localforage";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
@@ -50,13 +52,15 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
 }
 
 export function AppConfigPanel({ showDoneButton = false, initialTab = "channels" }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
-    const { message } = App.useApp();
+    const { message, modal } = App.useApp();
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
     const [editingChannelId, setEditingChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
     const [syncingWebdav, setSyncingWebdav] = useState(false);
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
     const [webdavDomainProgress, setWebdavDomainProgress] = useState(createWebdavDomainProgress);
+    const [clearingImages, setClearingImages] = useState(false);
+    const [clearingTools, setClearingTools] = useState(false);
     const config = useConfigStore((state) => state.config);
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -151,6 +155,51 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         }
     };
 
+    const clearImageCache = async () => {
+        const stats = await getImageCacheStats();
+        modal.confirm({
+            title: "清除图片缓存",
+            content: `将清除 ${stats.count} 张本地缓存图片（共 ${formatBytes(stats.bytes)}），此操作不可撤销。画布中引用的图片将从 IndexedDB 重新读取或变为失效。`,
+            okText: "确认清除",
+            cancelText: "取消",
+            okButtonProps: { danger: true },
+            onOk: async () => {
+                setClearingImages(true);
+                try {
+                    const result = await clearAllImages();
+                    message.success(`已清除 ${result.count} 张图片缓存（${formatBytes(result.bytes)}）`);
+                } catch (error) {
+                    message.error(error instanceof Error ? error.message : "清除失败");
+                } finally {
+                    setClearingImages(false);
+                }
+            },
+        });
+    };
+
+    const clearToolCache = async () => {
+        modal.confirm({
+            title: "清除工具缓存",
+            content: "将清除 LocalStorage 和 IndexedDB 中的应用状态缓存（不包含画布数据和图片），此操作不可撤销。清除后页面会刷新。",
+            okText: "确认清除",
+            cancelText: "取消",
+            okButtonProps: { danger: true },
+            onOk: async () => {
+                setClearingTools(true);
+                try {
+                    await localforage.clear();
+                    window.localStorage.clear();
+                    window.sessionStorage.clear();
+                    message.success("工具缓存已清除，页面即将刷新");
+                    setTimeout(() => window.location.reload(), 800);
+                } catch (error) {
+                    message.error(error instanceof Error ? error.message : "清除失败");
+                    setClearingTools(false);
+                }
+            },
+        });
+    };
+
     return (
         <>
             <Tabs
@@ -235,9 +284,49 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                 <Form.Item label="默认音频指令" className="mb-4">
                                     <Input.TextArea rows={2} value={config.audioInstructions} placeholder="例如：自然、温暖、适合旁白。" onChange={(event) => updateConfig("audioInstructions", event.target.value)} />
                                 </Form.Item>
-                                <Form.Item label="系统提示词" className="mb-0">
+                                <Form.Item label="系统提示词" className="mb-4">
                                     <Input.TextArea rows={4} value={config.systemPrompt} placeholder="例如：你是一位擅长电影感写实摄影的视觉导演。" onChange={(event) => updateConfig("systemPrompt", event.target.value)} />
                                 </Form.Item>
+                                {/* 缓存管理 */}
+                                <div className="mb-2 text-sm font-semibold">缓存管理</div>
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <div className="flex items-start justify-between gap-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+                                        <div className="flex items-center gap-2">
+                                            <HardDrive className="size-4 shrink-0 text-stone-400" />
+                                            <div>
+                                                <div className="text-sm font-medium">图片缓存</div>
+                                                <div className="mt-0.5 text-xs text-stone-500">清除 IndexedDB 中存储的本地图片文件</div>
+                                            </div>
+                                        </div>
+                                        <Button
+                                            size="small"
+                                            danger
+                                            icon={<Trash2 className="size-3.5" />}
+                                            loading={clearingImages}
+                                            onClick={() => void clearImageCache()}
+                                        >
+                                            清除
+                                        </Button>
+                                    </div>
+                                    <div className="flex items-start justify-between gap-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+                                        <div className="flex items-center gap-2">
+                                            <Database className="size-4 shrink-0 text-stone-400" />
+                                            <div>
+                                                <div className="text-sm font-medium">工具缓存</div>
+                                                <div className="mt-0.5 text-xs text-stone-500">清除 LocalStorage / IndexedDB 应用状态，页面将刷新</div>
+                                            </div>
+                                        </div>
+                                        <Button
+                                            size="small"
+                                            danger
+                                            icon={<Trash2 className="size-3.5" />}
+                                            loading={clearingTools}
+                                            onClick={() => void clearToolCache()}
+                                        >
+                                            清除
+                                        </Button>
+                                    </div>
+                                </div>
                             </Form>
                         ),
                     },

@@ -100,6 +100,27 @@ export function collectImageStorageKeys(value: unknown, keys = new Set<string>()
     return keys;
 }
 
+/** 清除所有本地图片缓存（IndexedDB image_files store） */
+export async function clearAllImages(): Promise<{ count: number; bytes: number }> {
+    const keys: string[] = [];
+    let bytes = 0;
+    await store.iterate((value: Blob, key) => {
+        keys.push(key);
+        bytes += value?.size ?? 0;
+    });
+    for (const url of objectUrls.values()) URL.revokeObjectURL(url);
+    objectUrls.clear();
+    await store.clear();
+    return { count: keys.length, bytes };
+}
+
+/** 统计图片缓存大小（条数 + 字节数） */
+export async function getImageCacheStats(): Promise<{ count: number; bytes: number }> {
+    let count = 0, bytes = 0;
+    await store.iterate((value: Blob) => { count++; bytes += value?.size ?? 0; });
+    return { count, bytes };
+}
+
 function blobToDataUrl(blob: Blob) {
     return new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
