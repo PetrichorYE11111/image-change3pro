@@ -66,7 +66,7 @@ import {
     sourceNodeReferenceImages,
 } from "@/lib/canvas/canvas-generation-helpers";
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
-import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
+import { registerBuiltinNodes, registerLayoutEditorNode } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasPluginManagerModal } from "@/components/canvas/canvas-plugin-manager-modal";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
@@ -90,6 +90,7 @@ import type { ReferenceAudio } from "@/types/media";
 
 // 内置节点注册到统一注册表(模块加载时执行一次)
 registerBuiltinNodes();
+registerLayoutEditorNode();
 
 type CanvasClipboard = {
     nodes: CanvasNodeData[];

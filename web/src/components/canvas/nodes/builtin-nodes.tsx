@@ -1,9 +1,11 @@
-import { FileText, Group, Image as ImageIcon, Music2, Settings2, Video } from "lucide-react";
+import { FileText, Group, Image as ImageIcon, LayoutGrid, Music2, Settings2, Video } from "lucide-react";
 
 import { NODE_SPECS } from "@/constant/canvas";
 import { registerNodeDefinitions } from "@/lib/canvas/node-registry";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import type { CanvasNodeDefinition, CanvasNodeResource } from "@/types/canvas-plugin";
+import { LayoutEditorContent, LayoutEditorPanel } from "@/components/canvas/canvas-layout-editor-node";
+import { EMPTY_LAYOUT_DATA } from "@/types/canvas-layout";
 
 // 内置节点的可扩展元数据(尺寸/初始 metadata 复用 NODE_SPECS)。
 // 渲染仍由 canvas-node 内部渲染器负责,故不提供 Content。
@@ -34,4 +36,32 @@ export function registerBuiltinNodes() {
     if (registered) return;
     registered = true;
     registerNodeDefinitions(BUILTIN_DEFINITIONS, "builtin");
+}
+
+// ---- 布局编辑器节点（独立注册，不走 NODE_SPECS .map()） ----
+let layoutRegistered = false;
+export function registerLayoutEditorNode() {
+    if (layoutRegistered) return;
+    layoutRegistered = true;
+    const def: CanvasNodeDefinition = {
+        type: "layout-editor",
+        title: "布局编辑器",
+        description: "分区域绘制布局，每区域独立填写提示词驱动生图；可外挂参考图",
+        icon: <LayoutGrid className="size-5" />,
+        defaultSize: { width: 480, height: 340 },
+        defaultMetadata: {
+            status: "idle",
+            layoutData: JSON.stringify(EMPTY_LAYOUT_DATA),
+        },
+        minimapColor: "#f59e0b",
+        autoOpenPanel: false,
+        Content: LayoutEditorContent,
+        Panel: LayoutEditorPanel,
+        onDoubleClick: (ctx) => { ctx.openPanel(); return true; },
+        resource: (node) =>
+            node.metadata?.layoutData
+                ? { kind: "text", text: node.metadata.layoutData }
+                : null,
+    };
+    registerNodeDefinitions([def], "builtin");
 }

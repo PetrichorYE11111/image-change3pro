@@ -63,6 +63,7 @@ export type CanvasNodeMetadata = {
     durationMs?: number;
     groupId?: string;
     interactive?: boolean; // 插件节点「交互 ⇄ 移动」开关状态(见 CanvasNodeDefinition.interactionToggle)
+    layoutData?: string;   // 布局编辑器节点的 JSON 数据（LayoutData 序列化）
 };
 
 export type CanvasNodeData = {
