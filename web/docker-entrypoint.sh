@@ -20,3 +20,12 @@ window.__RUNTIME_CONFIG__ = {
   ANALYTICS_BAIDU_ID: "${BAIDU_ID}"
 };
 EOF
+
+# Railway / 任意宿主动态端口支持：
+# 若设置了 PORT 环境变量（Railway 注入），用 envsubst 把 nginx.conf 模板中的
+# ${PORT} 替换为实际端口；否则回退到 3000（本地 Docker 默认）。
+export PORT="${PORT:-3000}"
+envsubst '${PORT}' \
+    < /etc/nginx/conf.d/default.conf \
+    > /tmp/nginx-rendered.conf
+cp /tmp/nginx-rendered.conf /etc/nginx/conf.d/default.conf
