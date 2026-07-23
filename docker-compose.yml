@@ -9,3 +9,19 @@ services:
     # environment:
     #   ANALYTICS_GA4_ID: G-XXXXXXXXXX                    # Google Analytics 4 衡量 ID
     #   ANALYTICS_BAIDU_ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxx   # 百度统计站点 ID
+
+  layout-service:
+    build:
+      context: ./layout-service
+      dockerfile: Dockerfile
+    container_name: layout-service
+    restart: unless-stopped
+    environment:
+      # 二选一配置凭据：
+      # 方案A — Vertex AI（企业版，推荐）
+      GOOGLE_CLOUD_PROJECT: ""          # 填入 GCP 项目 ID
+      GOOGLE_CLOUD_LOCATION: "global"
+      # 方案B — 标准 Gemini API Key
+      # GOOGLE_API_KEY: ""
+      LAYOUT_MODEL_ID: "gemini-3-pro-image"
+

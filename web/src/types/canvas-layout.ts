@@ -8,6 +8,7 @@ export type LayoutRegion = {
     startY: number;
     endX: number;
     endY: number;
+    referenceNodeIds?: string[];  // 该区域独立的参考图节点 ID（@ 引用）
 };
 
 export type LayoutPoint = {
