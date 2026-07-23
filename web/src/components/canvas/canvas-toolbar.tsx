@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, LayoutGrid, Moon, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -20,6 +20,7 @@ export function CanvasToolbar({
     onAddText,
     onAddConfig,
     onAddGroup,
+    onAddLayoutEditor,
     onAddExtensionNode,
     onUndo,
     onRedo,
@@ -41,6 +42,7 @@ export function CanvasToolbar({
     onAddText: () => void;
     onAddConfig: () => void;
     onAddGroup: () => void;
+    onAddLayoutEditor: () => void;
     onAddExtensionNode: (type: string) => void;
     onUndo: () => void;
     onRedo: () => void;
@@ -114,6 +116,9 @@ export function CanvasToolbar({
                 </ToolbarButton>
                 <ToolbarButton id="tool-group" label="组" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
                     <Group className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-layout-editor" label="布局编辑器" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddLayoutEditor}>
+                    <LayoutGrid className="size-4.5" />
                 </ToolbarButton>
                 {extensionDefs.length ? (
                     <ToolbarButton
