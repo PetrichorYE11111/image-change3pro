@@ -5,12 +5,16 @@ import { Brush, Eraser, ImagePlus, RotateCcw, WandSparkles, X } from "lucide-rea
 import { readFileAsDataUrl, readImageMeta } from "@/lib/image-utils";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import type { ReferenceImage } from "@/types/image";
+import { ModelPicker } from "@/components/model-picker";
+import type { AiConfig } from "@/stores/use-config-store";
 
 /** 用户在弹窗内直接上传的参考图 */
 type UploadedRef = { id: string; name: string; dataUrl: string };
 
 export type CanvasImageMaskEditPayload = {
     prompt: string;
+    /** 用户在弹窗内选定的生图模型（编码值 channelId::model），空则沿用节点/全局默认 */
+    model: string;
     maskDataUrl: string;
     /** 用户通过 @ 选取的额外参考图，与涂抹区域一起发给 API */
     extraReferences?: ReferenceImage[];
@@ -25,21 +29,28 @@ const maskBorderColor = "rgba(255, 255, 255, .72)";
 export function CanvasNodeMaskEditDialog({
     dataUrl,
     open,
+    config,
+    defaultModel,
     availableReferences = [],
     onClose,
     onConfirm,
+    onMissingConfig,
 }: {
     dataUrl: string;
     open: boolean;
+    config: AiConfig;
+    defaultModel: string;
     availableReferences?: CanvasResourceReference[];
     onClose: () => void;
     onConfirm: (payload: CanvasImageMaskEditPayload) => void;
+    onMissingConfig?: () => void;
 }) {
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const previewCanvasRef = useRef<HTMLCanvasElement>(null);
     const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
     const [image, setImage] = useState<{ width: number; height: number } | null>(null);
     const [prompt, setPrompt] = useState("");
+    const [model, setModel] = useState(defaultModel);
     const [brushSize, setBrushSize] = useState(defaultBrushSize);
     const [mode, setMode] = useState<DrawMode>("paint");
     const [error, setError] = useState("");
@@ -50,13 +61,14 @@ export function CanvasNodeMaskEditDialog({
     useEffect(() => {
         if (!open) return;
         setPrompt("");
+        setModel(defaultModel);
         setBrushSize(defaultBrushSize);
         setMode("paint");
         setError("");
         setSelectedRefs([]);
         setUploadedRefs([]);
         void readImageMeta(dataUrl).then(setImage);
-    }, [dataUrl, open]);
+    }, [dataUrl, open, defaultModel]);
 
     useEffect(() => {
         clearCanvas(maskCanvasRef.current);
@@ -125,7 +137,7 @@ export function CanvasNodeMaskEditDialog({
             .map((ref) => ({ id: ref.id, name: ref.title || ref.id, type: "image/png", dataUrl: ref.previewUrl!, storageKey: undefined }));
         const fromUploaded: ReferenceImage[] = uploadedRefs.map((ref) => ({ id: ref.id, name: ref.name, type: ref.dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png", dataUrl: ref.dataUrl, storageKey: undefined }));
         const extraReferences = [...fromSelected, ...fromUploaded];
-        onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas), extraReferences: extraReferences.length ? extraReferences : undefined });
+        onConfirm({ prompt: nextPrompt, model: model || defaultModel, maskDataUrl: buildEditMask(canvas), extraReferences: extraReferences.length ? extraReferences : undefined });
     };
 
     const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -178,6 +190,11 @@ export function CanvasNodeMaskEditDialog({
                     <div>
                         <h2 className="text-xl font-semibold">局部遮罩编辑</h2>
                         <div className="mt-2 text-sm opacity-60">{image ? `${image.width} x ${image.height}px` : "读取中"}</div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <div className="text-sm font-medium opacity-75">生成模型</div>
+                        <ModelPicker config={config} value={model} onChange={setModel} capability="image" fullWidth onMissingConfig={onMissingConfig} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
