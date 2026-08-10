@@ -258,17 +258,29 @@ function parseImagePayload(payload: ImageApiResponse) {
 
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return "请求已取消";
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
-        const responseData = error.response?.data;
-        return responseData?.msg || responseData?.error?.message || readStatusError(error.response?.status, fallback);
+    if (axios.isAxiosError<unknown>(error)) {
+        // 上游返回体可能是 JSON 对象，也可能是纯文本（代理层报错时常见），都尽量透出原始信息。
+        const upstream = readUpstreamMessage(error.response?.data);
+        const status = readStatusError(error.response?.status, fallback);
+        return upstream ? `${status}｜上游返回：${upstream}` : status;
     }
     if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
     return error instanceof Error ? error.message : fallback;
 }
 
+function readUpstreamMessage(data: unknown): string {
+    if (typeof data === "string") return data.trim().slice(0, 300);
+    if (!isRecord(data)) return "";
+    const error = isRecord(data.error) ? data.error : undefined;
+    const message = stringValue(data.msg) || stringValue(data.message) || stringValue(error?.message);
+    const status = stringValue(error?.status) || stringValue(data.code);
+    return [message, status && status !== message ? `(${status})` : ""].filter(Boolean).join(" ").slice(0, 300);
+}
+
 function readStatusError(status: number | undefined, fallback: string) {
     if (status === 401 || status === 403) return "鉴权失败，请检查 API Key、套餐权限或模型权限";
     if (status === 429) return "请求被限流或额度不足，请稍后重试";
+    if (status === 500 || status === 502 || status === 503) return "上游接口错误，可能是该模型不可用、请求体不被支持或中转服务异常";
     return status ? `${fallback}：${status}` : fallback;
 }
 
@@ -636,7 +648,7 @@ async function buildGeminiMaskComposite(original: ReferenceImage, mask: Referenc
             const canvas = document.createElement("canvas");
             canvas.width = img.width;
             canvas.height = img.height;
-            const ctx = canvas.getContext("2d");
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
             if (!ctx) { resolve(original); return; }
             ctx.drawImage(img, 0, 0);
 
@@ -646,7 +658,7 @@ async function buildGeminiMaskComposite(original: ReferenceImage, mask: Referenc
                 const tmp = document.createElement("canvas");
                 tmp.width = img.width;
                 tmp.height = img.height;
-                const tmpCtx = tmp.getContext("2d");
+                const tmpCtx = tmp.getContext("2d", { willReadFrequently: true });
                 if (!tmpCtx) { resolve(original); return; }
                 tmpCtx.drawImage(maskImg, 0, 0, img.width, img.height);
                 const maskPx = tmpCtx.getImageData(0, 0, img.width, img.height).data;
@@ -688,10 +700,12 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
         if (dataUrl) parts.push(toGeminiImagePart(dataUrl));
     }
     const imageConfig = resolveGeminiImageConfig(config);
+    // gemini-3-pro-image 等图像模型必须显式声明 IMAGE 模态，否则网关按纯文本请求处理并报错。
+    const generationConfig = { responseModalities: ["TEXT", "IMAGE"], ...imageConfig };
     const response = await axios.post<GeminiPayload>(
         geminiApiUrl(config, "generateContent"),
         {
-            ...toGeminiBody(config, [{ role: "user", content: prompt }], Object.keys(imageConfig).length ? { generationConfig: imageConfig } : {}),
+            ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig }),
             contents: [{ role: "user", parts }],
         },
         { headers: geminiHeaders(config), signal: options?.signal },
