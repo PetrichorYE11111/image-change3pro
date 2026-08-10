@@ -121,6 +121,21 @@ curl -s -w "\n%{http_code}\n" -H "Origin: https://evil.example.com" "$URL"
 
 响应头包含 `access-control-allow-origin`，浏览器不再拦截。
 
+### 6.1 gpt-image-2 三条链路端到端实测（2026-08-10）
+
+用 change2pro 沙盒 key 经反代实跑，三条链路全部 `200` 且返回 `b64_json`，响应头均带 `access-control-allow-origin: *`：
+
+| 链路 | 前端代码 | 请求 | 结果 |
+|---|---|---|---|
+| 列模型 / SDK | `fetchImageModels()` | `GET /v1/models` | `200`，返回 `gpt-image-2` |
+| 文生图 | `requestGeneration()` | `POST /v1/images/generations`（JSON） | `200` + `b64_json`，~43s |
+| 图生图 | `requestEdit()` | `POST /v1/images/edits`（multipart，字段 `image`） | `200` + `b64_json`，~59s（直连 ~97s） |
+
+说明：
+
+- 前端 `buildApiUrl()` 会强制补 `/v1`；实测 change2pro 兼容 `/v1/images/*`，**前端无需改代码**，`gpt-image-2` 已是默认图片模型。
+- change2pro 返回体带 C2PA（`jumb`/`c2pa`）元数据，属正常。
+
 ## 七、安全注意事项
 
 - **API Key 泄露风险**：调试过程中若在明文渠道（聊天、日志、截图）暴露过 `sk-...` key，应立即到 change2pro 后台**撤销并重新生成**。
