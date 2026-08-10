@@ -66,7 +66,7 @@ export function CanvasNodeMaskEditDialog({
     const draw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
         const point = readCanvasPoint(event.currentTarget, event.clientX, event.clientY);
         const maskCanvas = maskCanvasRef.current;
-        const context = maskCanvas?.getContext("2d");
+        const context = maskCanvas && readbackContext(maskCanvas);
         if (!maskCanvas || !context) return;
         context.lineCap = "round";
         context.lineJoin = "round";
@@ -299,8 +299,16 @@ function readCanvasPoint(canvas: HTMLCanvasElement, clientX: number, clientY: nu
     };
 }
 
+/**
+ * 画布的 context 属性在首次 getContext 时就固定了，之后再传不同属性会被忽略。
+ * 蒙版相关画布每笔都要 getImageData 回读，必须统一从这里取 context。
+ */
+function readbackContext(canvas: HTMLCanvasElement) {
+    return canvas.getContext("2d", { willReadFrequently: true });
+}
+
 function clearCanvas(canvas: HTMLCanvasElement | null) {
-    const context = canvas?.getContext("2d");
+    const context = canvas && readbackContext(canvas);
     if (!canvas || !context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
 }
@@ -319,7 +327,7 @@ function drawMaskStroke(context: CanvasRenderingContext2D, from: { x: number; y:
 }
 
 function canvasHasPaint(canvas: HTMLCanvasElement) {
-    const context = canvas.getContext("2d");
+    const context = readbackContext(canvas);
     if (!context) return false;
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 3; index < data.length; index += 4) {
@@ -329,7 +337,7 @@ function canvasHasPaint(canvas: HTMLCanvasElement) {
 }
 
 function renderMaskPreview(maskCanvas: HTMLCanvasElement, previewCanvas: HTMLCanvasElement | null, withBorder = false) {
-    const context = previewCanvas?.getContext("2d");
+    const context = previewCanvas && readbackContext(previewCanvas);
     if (!previewCanvas || !context) return;
     context.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
     context.fillStyle = maskFillColor;
@@ -341,7 +349,7 @@ function renderMaskPreview(maskCanvas: HTMLCanvasElement, previewCanvas: HTMLCan
 }
 
 function drawDashedMaskBorder(context: CanvasRenderingContext2D, maskCanvas: HTMLCanvasElement) {
-    const maskContext = maskCanvas.getContext("2d");
+    const maskContext = readbackContext(maskCanvas);
     if (!maskContext) return;
     const { width, height } = maskCanvas;
     const data = maskContext.getImageData(0, 0, width, height).data;
@@ -373,9 +381,9 @@ function buildEditMask(selectionCanvas: HTMLCanvasElement) {
     const canvas = document.createElement("canvas");
     canvas.width = selectionCanvas.width;
     canvas.height = selectionCanvas.height;
-    const context = canvas.getContext("2d");
+    const context = readbackContext(canvas);
     if (!context) return selectionCanvas.toDataURL("image/png");
-    const selectionContext = selectionCanvas.getContext("2d");
+    const selectionContext = readbackContext(selectionCanvas);
     context.fillStyle = "#fff";
     context.fillRect(0, 0, canvas.width, canvas.height);
     if (!selectionContext) return canvas.toDataURL("image/png");
