@@ -1721,7 +1721,7 @@ function InfiniteCanvasPage() {
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
-            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: resolveEditSize(node) };
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: resolveEditSize(node), ...(payload.model ? { model: payload.model } : {}) };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -2961,9 +2961,12 @@ function InfiniteCanvasPage() {
                     <CanvasNodeMaskEditDialog
                         dataUrl={maskEditNode.metadata.content}
                         open={Boolean(maskEditNode)}
+                        config={effectiveConfig}
+                        defaultModel={maskEditNode.metadata.model || effectiveConfig.imageModel}
                         availableReferences={mentionReferencesByNodeId.get(maskEditNode.id) || EMPTY_REFERENCES}
                         onClose={() => setMaskEditNodeId(null)}
                         onConfirm={(payload) => void maskEditImageNode(maskEditNode!, payload)}
+                        onMissingConfig={() => openConfigDialog(true)}
                     />
                 ) : null}
 
