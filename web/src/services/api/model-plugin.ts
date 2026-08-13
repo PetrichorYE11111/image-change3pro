@@ -253,13 +253,15 @@ const aspectRatio = dim
   : undefined;
 const imageSize = { high: "4K", hd: "4K", medium: "2K", low: "1K" }[params.quality];
 const imageConfig = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) };
+// gemini-3-pro-image 等图像模型必须显式声明 IMAGE 模态，否则网关按纯文本请求处理并报错。
+const generationConfig = { responseModalities: ["TEXT", "IMAGE"], ...(Object.keys(imageConfig).length ? { imageConfig } : {}) };
 const data = await request({
   method: "post",
   url: \`\${baseUrl}/v1beta/models/\${model}:generateContent\`,
   headers: { "Content-Type": "application/json", ...geminiAuthHeader },
   data: {
     contents: [{ role: "user", parts }],
-    ...(Object.keys(imageConfig).length ? { generationConfig: { imageConfig } } : {}),
+    generationConfig,
   },
 });
 return (data.candidates || [])
@@ -289,12 +291,14 @@ const aspectRatio = dim
   : undefined;
 const imageSize = { high: "4K", hd: "4K", medium: "2K", low: "1K" }[params.quality];
 const imageConfig = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) };
+// gemini-3-pro-image 等图像模型必须显式声明 IMAGE 模态，否则网关按纯文本请求处理并报错。
+const generationConfig = { responseModalities: ["TEXT", "IMAGE"], ...(Object.keys(imageConfig).length ? { imageConfig } : {}) };
 const response = await fetch(\`\${baseUrl}/v1beta/models/\${model}:streamGenerateContent?alt=sse\`, {
   method: "POST",
   headers: { "Content-Type": "application/json", ...geminiAuthHeader },
   body: JSON.stringify({
     contents: [{ role: "user", parts }],
-    ...(Object.keys(imageConfig).length ? { generationConfig: { imageConfig } } : {}),
+    generationConfig,
   }),
   signal,
 });
