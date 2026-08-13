@@ -1,5 +1,6 @@
 import axios from "axios";
 
+import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
@@ -7,6 +8,8 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
+
+const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
 export type AiTextMessage = {
     role: "system" | "user" | "assistant";
@@ -154,16 +157,16 @@ function resolveSize(quality: string | undefined, ratio: string): string {
 
 function parseRatioValue(value: string) {
     const parts = value.split(":");
-    if (parts.length !== 2) throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
+    if (parts.length !== 2) throw new Error(apiText("invalidImageSizeFormat"));
     const w = Number(parts[0]);
     const h = Number(parts[1]);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) throw new Error("图像比例必须是正数，例如 9:16");
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) throw new Error(apiText("positiveImageRatio"));
     return { width: w, height: h };
 }
 
 function parseImageRatio(value: string) {
     const ratio = parseRatioValue(value);
-    if (Math.max(ratio.width, ratio.height) / Math.min(ratio.width, ratio.height) > IMAGE_MAX_RATIO) throw new Error("图像宽高比不能超过 3:1，请调整尺寸");
+    if (Math.max(ratio.width, ratio.height) / Math.min(ratio.width, ratio.height) > IMAGE_MAX_RATIO) throw new Error(apiText("imageRatioLimit"));
     return ratio;
 }
 
@@ -174,12 +177,12 @@ function parseImageDimensions(value: string) {
 }
 
 function validateImageSize(width: number, height: number) {
-    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) throw new Error("图像尺寸必须是正整数，例如 1024x1024");
-    if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) throw new Error("图像尺寸的宽高必须是 16 的倍数，请调整尺寸");
-    if (Math.max(width, height) > IMAGE_MAX_EDGE) throw new Error("图像尺寸最长边不能超过 3840px，请调整尺寸");
-    if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) throw new Error("图像宽高比不能超过 3:1，请调整尺寸");
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) throw new Error(apiText("positiveImageDimensions"));
+    if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) throw new Error(apiText("imageDimensionStep"));
+    if (Math.max(width, height) > IMAGE_MAX_EDGE) throw new Error(apiText("imageEdgeLimit"));
+    if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) throw new Error(apiText("imageRatioLimit"));
     const pixels = width * height;
-    if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");
+    if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error(apiText("imagePixelLimit"));
 }
 
 function resolveRequestSize(quality: string | undefined, size: string) {
@@ -191,7 +194,7 @@ function resolveRequestSize(quality: string | undefined, size: string) {
         return `${dimensions.width}x${dimensions.height}`;
     }
     if (value.includes(":")) return resolveSize(quality, value);
-    throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
+    throw new Error(apiText("invalidImageSizeFormat"));
 }
 
 function resolveGeminiImageConfig(config: AiConfig) {
@@ -241,31 +244,77 @@ function resolveImageDataUrl(item: Record<string, unknown>) {
 
 function parseImagePayload(payload: ImageApiResponse) {
     if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
+        throw new Error(payload.msg || apiText("requestFailed"));
     }
+    // Support data, images, and results response fields used by different APIs.
+    const imageList = payload.data
+        || (payload as Record<string, unknown>).images as Array<Record<string, unknown>> | undefined
+        || (payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined
+        || [];
     const images =
-        payload.data
-            ?.map(resolveImageDataUrl)
+        imageList
+            .map(resolveImageDataUrl)
             .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+            .map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
     if (images.length === 0) {
-        throw new Error("接口没有返回图片");
+        // Check whether the response contains data in an unrecognized format.
+        const rawKeys = Object.keys(payload).filter((k) => k !== "code" && k !== "msg" && k !== "error");
+        throw new Error(rawKeys.length > 0
+            ? apiText("unknownImageResponse", { fields: rawKeys.join(", ") })
+            : apiText("noImageReturned"));
     }
 
     return images;
 }
 
-function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isCancel(error)) return "请求已取消";
-    if (axios.isAxiosError<unknown>(error)) {
-        // 上游返回体可能是 JSON 对象，也可能是纯文本（代理层报错时常见），都尽量透出原始信息。
-        const upstream = readUpstreamMessage(error.response?.data);
-        const status = readStatusError(error.response?.status, fallback);
-        return upstream ? `${status}｜上游返回：${upstream}` : status;
+function readApiErrorMessage(value: unknown): string {
+    if (!value) return "";
+    if (typeof value === "string") {
+        // The value may be serialized JSON, such as error.message, or a plain-text error.
+        try {
+            const parsed = JSON.parse(value);
+            const inner = readApiErrorMessage(parsed) || value;
+            // Treat an empty parsed object such as "{}" as having no useful message.
+            if (inner === value && typeof parsed === "object" && Object.keys(parsed).length === 0) return "";
+            return inner;
+        } catch {
+            // Detect HTML error pages.
+            if (/<[a-z][\s\S]*>/i.test(value)) return apiText("htmlError", { preview: `${value.slice(0, 80)}...` });
+            return value;
+        }
     }
-    if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
-    return error instanceof Error ? error.message : fallback;
+    if (typeof value !== "object") return "";
+    const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
+    // error may be a string or an object containing a message.
+    const errorMsg =
+        typeof payload.error === "string"
+            ? payload.error
+            : (payload.error as { message?: unknown })?.message;
+    return (
+        readApiErrorMessage(payload.msg) ||
+        readApiErrorMessage(payload.message) ||
+        readApiErrorMessage(errorMsg) ||
+        readApiErrorMessage(payload.detail) ||
+        ""
+    );
+}
+
+function readAxiosError(error: unknown, fallback: string) {
+    if (axios.isCancel(error)) return apiText("requestCanceled");
+    if (axios.isAxiosError(error)) {
+        const responseData = error.response?.data;
+        // Prefer the API error from the response body.
+        const apiMsg = readApiErrorMessage(responseData);
+        if (apiMsg) return apiMsg;
+        // Infer the error from the HTTP status when the response body has no usable message.
+        const statusMsg = readStatusError(error.response?.status, fallback);
+        if (statusMsg) return statusMsg;
+        // Fall back to Axios's own error message.
+        return error.message || fallback;
+    }
+    if (error instanceof DOMException && error.name === "AbortError") return apiText("requestCanceled");
+    return error instanceof Error ? readApiErrorMessage(error.message) || error.message : fallback;
 }
 
 function readUpstreamMessage(data: unknown): string {
@@ -278,10 +327,12 @@ function readUpstreamMessage(data: unknown): string {
 }
 
 function readStatusError(status: number | undefined, fallback: string) {
-    if (status === 401 || status === 403) return "鉴权失败，请检查 API Key、套餐权限或模型权限";
-    if (status === 429) return "请求被限流或额度不足，请稍后重试";
-    if (status === 500 || status === 502 || status === 503) return "上游接口错误，可能是该模型不可用、请求体不被支持或中转服务异常";
-    return status ? `${fallback}：${status}` : fallback;
+    if (status === 401 || status === 403) return apiText("authenticationFailed");
+    if (status === 429) return apiText("rateLimited");
+    if (status === 404) return apiText("notFound");
+    if (status === 502) return apiText("badGateway");
+    if (status === 503) return apiText("serviceBusy");
+    return status ? apiText("httpFailed", { status }) : fallback;
 }
 
 function withSystemPrompt(config: AiConfig, prompt: string) {
@@ -387,13 +438,13 @@ function stringValue(value: unknown) {
 }
 
 function validateResponsePayload(payload: ResponseApiPayload) {
-    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || "请求失败");
+    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || apiText("requestFailed"));
     if (payload.error?.message) throw new Error(payload.error.message);
 }
 
 function validateGeminiPayload(payload: GeminiPayload) {
     if (payload.error?.message) throw new Error(payload.error.message);
-    if (payload.promptFeedback?.blockReason) throw new Error(`Gemini 拒绝了本次请求：${payload.promptFeedback.blockReason}`);
+    if (payload.promptFeedback?.blockReason) throw new Error(apiText("geminiRejected", { reason: payload.promptFeedback.blockReason }));
 }
 
 async function readFetchError(response: Response, fallback: string) {
@@ -455,7 +506,7 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
     });
-    if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
+    if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
     if (!response.body) {
         const payload = (await response.json()) as ResponseApiPayload;
         validateResponsePayload(payload);
@@ -562,7 +613,7 @@ async function requestGeminiStreamingResponse(config: AiConfig, body: Record<str
         body: JSON.stringify(body),
         signal: options?.signal,
     });
-    if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
+    if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
     if (!response.body) {
         const payload = (await response.json()) as GeminiPayload;
         return parseGeminiToolResponse(payload);
@@ -725,7 +776,7 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
             })
             .filter((value): value is string => Boolean(value))
             .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
-    if (!images.length) throw new Error("Gemini 接口没有返回图片");
+    if (!images.length) throw new Error(apiText("geminiNoImage"));
     return images;
 }
 
@@ -749,14 +800,14 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
         } catch (error) {
-            throw new Error(readAxiosError(error, "请求失败"));
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
         } catch (error) {
-            throw new Error(readAxiosError(error, "请求失败"));
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
     const quality = normalizeQuality(config.quality);
@@ -783,7 +834,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         const images = parseImagePayload(response.data);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        throw new Error(readAxiosError(error, apiText("requestFailed")));
     }
 }
 
@@ -809,7 +860,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
         } catch (error) {
-            throw new Error(readAxiosError(error, "请求失败"));
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
     if (requestConfig.apiFormat === "gemini") {
@@ -827,9 +878,41 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             }
             return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
         } catch (error) {
-            throw new Error(readAxiosError(error, "请求失败"));
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
+
+    if (requestConfig.apiFormat === "ark") {
+        if (mask) throw new Error(apiText("maskModelUnsupported"));
+        const quality = normalizeQuality(config.quality);
+        const requestSize = resolveRequestSize(quality, config.size);
+        const background = normalizeBackground(config.background);
+        const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
+        try {
+            const response = await axios.post<ImageApiResponse>(
+                aiApiUrl(requestConfig, "/images/generations"),
+                {
+                    model: requestConfig.model,
+                    prompt: withSystemPrompt(requestConfig, requestPrompt),
+                    n,
+                    response_format: "b64_json",
+                    output_format: IMAGE_OUTPUT_FORMAT,
+                    image: refs,
+                    ...(quality ? { quality } : {}),
+                    ...(requestSize ? { size: requestSize } : {}),
+                    ...(background ? { background } : {}),
+                },
+                {
+                    headers: aiHeaders(requestConfig, "application/json"),
+                    signal: options?.signal,
+                },
+            );
+            return parseImagePayload(response.data);
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
+
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
@@ -857,7 +940,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         const images = parseImagePayload(response.data);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        throw new Error(readAxiosError(error, apiText("requestFailed")));
     }
 }
 
@@ -874,27 +957,28 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
                 signal: options?.signal,
                 onDelta,
             });
-            const text = String(answer ?? "").trim() || "没有返回内容";
-            if (text === "没有返回内容") onDelta(text);
+            const text = String(answer ?? "").trim() || apiText("noContent");
+            if (text === apiText("noContent")) onDelta(text);
             return text;
         } catch (error) {
-            throw new Error(readAxiosError(error, "请求失败"));
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
     try {
         if (requestConfig.apiFormat === "gemini") {
-            const answer = (await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messages), onDelta, options)).content || "没有返回内容";
-            if (answer === "没有返回内容") onDelta(answer);
+            const answer = (await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messages), onDelta, options)).content || apiText("noContent");
+            if (answer === apiText("noContent")) onDelta(answer);
             return answer;
         }
         const answer = (await requestStreamingResponse(requestConfig, {
             model: requestConfig.model,
             input: toResponseInput(withSystemMessage(requestConfig, messages)),
-        }, onDelta, options)).content || "没有返回内容";
-        if (answer === "没有返回内容") onDelta(answer);
+            ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
+        }, onDelta, options)).content || apiText("noContent");
+        if (answer === apiText("noContent")) onDelta(answer);
         return answer;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        throw new Error(readAxiosError(error, apiText("requestFailed")));
     }
 }
 
@@ -918,7 +1002,7 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
             .filter((id): id is string => Boolean(id))
             .sort((a, b) => a.localeCompare(b));
     } catch (error) {
-        throw new Error(readAxiosError(error, "读取模型失败"));
+        throw new Error(readAxiosError(error, apiText("modelReadFailed")));
     }
 }
 
