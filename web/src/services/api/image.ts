@@ -367,9 +367,11 @@ function geminiApiUrl(config: Pick<AiConfig, "baseUrl" | "model">, action?: "gen
     return `${baseUrl}/models/${encodeURIComponent(geminiModelName(config.model))}:${action}`;
 }
 
-function geminiHeaders(config: Pick<AiConfig, "apiKey">) {
+function geminiHeaders(config: Pick<AiConfig, "apiKey" | "baseUrl">) {
+    // Google 官方 API 用 x-goog-api-key；第三方中转（如 ciyuanapi）的 CORS 不放行 x-goog-api-key，改用 Authorization: Bearer。
+    const isGoogleOfficial = /generativelanguage\.googleapis\.com/i.test(config.baseUrl);
     return {
-        "x-goog-api-key": config.apiKey,
+        ...(isGoogleOfficial ? { "x-goog-api-key": config.apiKey } : { Authorization: `Bearer ${config.apiKey}` }),
         "Content-Type": "application/json",
     };
 }

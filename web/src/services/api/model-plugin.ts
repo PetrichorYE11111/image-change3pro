@@ -107,7 +107,7 @@ function createPoll(signal?: AbortSignal) {
 /**
  * Run a user-authored model call script as an async function body with flat locals (see PLUGIN_VARIABLES):
  *   prompt / images / messages / params        — request input
- *   model / baseUrl / apiKey / systemPrompt / reasoningEffort     — current channel and text settings
+ *   model / baseUrl / apiKey / systemPrompt / reasoningEffort / geminiAuthHeader     — current channel and text settings
  *   http / request / poll / sleep / signal / onDelta    — request helpers
  * The script must `return` the result; each caller normalizes it to its capability's shape.
  */
@@ -116,6 +116,10 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
     const http = createPluginHttp(config, { signal: args.signal });
     const request = createPluginRequest(config, { signal: args.signal });
     const poll = createPoll(args.signal);
+    // Google 官方 API 用 x-goog-api-key；第三方中转（如 ciyuanapi）的 CORS 不放行 x-goog-api-key，改用 Authorization: Bearer。
+    const geminiAuthHeader = /generativelanguage\.googleapis\.com/i.test(config.baseUrl)
+        ? { "x-goog-api-key": config.apiKey }
+        : { Authorization: `Bearer ${config.apiKey}` };
     const runner = new Function(
         "prompt",
         "images",
@@ -126,6 +130,7 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         "apiKey",
         "systemPrompt",
         "reasoningEffort",
+        "geminiAuthHeader",
         "http",
         "request",
         "poll",
@@ -145,6 +150,7 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
             config.apiKey,
             config.systemPrompt || "",
             config.reasoningEffort,
+            geminiAuthHeader,
             http,
             request,
             poll,
@@ -174,6 +180,7 @@ export function getPluginVariables(): PluginVariable[] {
         { name: "apiKey", type: "string", desc: i18n.t("modelPlugin.variables.apiKey") },
         { name: "systemPrompt", type: "string", desc: i18n.t("modelPlugin.variables.systemPrompt") },
         { name: "reasoningEffort", type: '"auto" | "low" | "medium" | "high" | "xhigh"', desc: i18n.t("modelPlugin.variables.reasoningEffort"), capabilities: ["text"] },
+        { name: "geminiAuthHeader", type: "object", desc: i18n.t("modelPlugin.variables.geminiAuthHeader") },
         { name: "http", type: "object", desc: i18n.t("modelPlugin.variables.http") },
         { name: "request", type: "function", desc: i18n.t("modelPlugin.variables.request") },
         { name: "poll", type: "function", desc: i18n.t("modelPlugin.variables.poll") },
@@ -249,7 +256,7 @@ const imageConfig = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { a
 const data = await request({
   method: "post",
   url: \`\${baseUrl}/v1beta/models/\${model}:generateContent\`,
-  headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+  headers: { "Content-Type": "application/json", ...geminiAuthHeader },
   data: {
     contents: [{ role: "user", parts }],
     ...(Object.keys(imageConfig).length ? { generationConfig: { imageConfig } } : {}),
@@ -284,7 +291,7 @@ const imageSize = { high: "4K", hd: "4K", medium: "2K", low: "1K" }[params.quali
 const imageConfig = { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) };
 const response = await fetch(\`\${baseUrl}/v1beta/models/\${model}:streamGenerateContent?alt=sse\`, {
   method: "POST",
-  headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+  headers: { "Content-Type": "application/json", ...geminiAuthHeader },
   body: JSON.stringify({
     contents: [{ role: "user", parts }],
     ...(Object.keys(imageConfig).length ? { generationConfig: { imageConfig } } : {}),
@@ -349,7 +356,7 @@ return await poll(
             label: i18n.t("modelPlugin.templates.gemini"),
             script: `// ${i18n.t("modelPlugin.templates.videoGemini")}
 // ${i18n.t("modelPlugin.templates.availableVideoGemini")}
-const headers = { "Content-Type": "application/json", "x-goog-api-key": apiKey };
+const headers = { "Content-Type": "application/json", ...geminiAuthHeader };
 const instance = { prompt };
 const first = images[0] && images[0].match(/^data:([^;]+);base64,(.*)$/);
 if (first) instance.image = { bytesBase64Encoded: first[2], mimeType: first[1] };
@@ -390,7 +397,7 @@ return await request({
 const data = await request({
   method: "post",
   url: \`\${baseUrl}/v1beta/models/\${model}:generateContent\`,
-  headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+  headers: { "Content-Type": "application/json", ...geminiAuthHeader },
   data: {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
@@ -434,7 +441,7 @@ const contents = messages
 const data = await request({
   method: "post",
   url: \`\${baseUrl}/v1beta/models/\${model}:generateContent\`,
-  headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+  headers: { "Content-Type": "application/json", ...geminiAuthHeader },
   data: { contents, ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}) },
 });
 const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
